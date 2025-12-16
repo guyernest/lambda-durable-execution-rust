@@ -1,0 +1,15 @@
+flowchart TD
+    n_07774e8a_ab0b_31_start([Start])
+    subgraph n_7eda5b43e4068571["first_successful_parallel"]
+        subgraph n_8c4851454e6bdcac["branch-0"]
+            n_0e8b1cd08dbf9483_Step_6["task1"]
+        end
+        subgraph n_61c224cf19b9d2e7["branch-2"]
+            n_56b739e81e6ad520_Step_7["task3"]
+        end
+        subgraph n_7c6ab0009b4bda80["branch-1"]
+            n_9934e94bdfa9a1bc_Step_8["task2"]
+        end
+    end
+    n_07774e8a_ab0b_31_end([Success])
+    n_07774e8a_ab0b_31_start --> n_7eda5b43e4068571 --> n_07774e8a_ab0b_31_end

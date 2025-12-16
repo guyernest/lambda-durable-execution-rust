@@ -1,0 +1,81 @@
+[package]
+name = "lambda-durable-execution-rust-examples"
+description = "Example AWS Lambda functions using the lambda-durable-execution-rust SDK"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+publish = false
+autobins = false
+
+[dependencies]
+lambda-durable-execution-rust = { path = ".." }
+
+tokio = { version = "1", features = ["full", "sync", "time", "macros"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lambda_runtime = "1.0.1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[[bin]]
+name = "hello_world"
+path = "src/bin/hello_world/main.rs"
+
+[[bin]]
+name = "callback_example"
+path = "src/bin/callback_example/main.rs"
+
+[[bin]]
+name = "step_retry"
+path = "src/bin/step_retry/main.rs"
+
+[[bin]]
+name = "child_context"
+path = "src/bin/child_context/main.rs"
+
+[[bin]]
+name = "map_operations"
+path = "src/bin/map_operations/main.rs"
+
+[[bin]]
+name = "parallel"
+path = "src/bin/parallel/main.rs"
+
+[[bin]]
+name = "parallel_first_successful"
+path = "src/bin/parallel_first_successful/main.rs"
+
+[[bin]]
+name = "map_with_failure_tolerance"
+path = "src/bin/map_with_failure_tolerance/main.rs"
+
+[[bin]]
+name = "wait_for_condition"
+path = "src/bin/wait_for_condition/main.rs"
+
+[[bin]]
+name = "map_with_custom_serdes"
+path = "src/bin/map_with_custom_serdes/main.rs"
+
+[[bin]]
+name = "wait_for_callback_heartbeat"
+path = "src/bin/wait_for_callback_heartbeat/main.rs"
+
+[[bin]]
+name = "wait_for_callback_multiple_invocations"
+path = "src/bin/wait_for_callback_multiple_invocations/main.rs"
+
+[[bin]]
+name = "block_example"
+path = "src/bin/block_example/main.rs"
+
+[[bin]]
+name = "invoke_target"
+path = "src/bin/invoke_target/main.rs"
+
+[[bin]]
+name = "invoke_caller"
+path = "src/bin/invoke_caller/main.rs"

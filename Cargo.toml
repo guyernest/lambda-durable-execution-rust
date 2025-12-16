@@ -1,0 +1,46 @@
+[package]
+name = "lambda-durable-execution-rust"
+description = "Durable Execution SDK for AWS Lambda (Rust) - experimental, community-maintained"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+keywords = ["lambda", "durable", "workflow", "serverless"]
+categories = ["asynchronous", "web-programming"]
+
+[dependencies]
+# AWS SDK
+aws-sdk-lambda = "1.112.0"
+aws-config = "1"
+aws-smithy-types = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full", "sync", "time", "macros"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0.17"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+md5 = "0.8.0"
+rand = "0.9.2"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Lambda runtime
+lambda_runtime = "1.0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []

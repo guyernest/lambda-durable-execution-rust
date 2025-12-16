@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+target/
+debug/
+release/
+.aws-sam/
+examples/.durable-validation/
+
+# Cargo
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+__pycache__/
+*.pyc
+
+# internal docs
+CLAUDE.md
+AGENTS.md
+.docs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

@@ -1,0 +1,10 @@
+flowchart TD
+    n_6975be56_d218_34_start([Start])
+    subgraph n_fe6725a4628f543a["wait-for-approval"]
+        n_bf55974300301ed0_Call_3{{"bf559743"}}
+        n_79060d944e077c96_Step_4["submitter"]
+        n_bf55974300301ed0_Call_6{{"bf559743"}}
+    end
+    n_3846c1f1d539f384_Step_8["execute-approved-action"]
+    n_6975be56_d218_34_end([Success])
+    n_6975be56_d218_34_start --> n_fe6725a4628f543a --> n_3846c1f1d539f384_Step_8 --> n_6975be56_d218_34_end

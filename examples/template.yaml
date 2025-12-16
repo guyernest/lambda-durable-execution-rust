@@ -1,0 +1,345 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Durable Execution SDK (Rust) - example functions
+
+# NOTE: AWS SAM rust-cargolambda support is a preview feature.
+# Enable with `SAM_CLI_BETA_RUST_CARGO_LAMBDA=1` or `sam build --beta-features`.
+
+Parameters:
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues:
+      - arm64
+      - x86_64
+  RustLog:
+    Type: String
+    Default: info
+
+Globals:
+  Function:
+    # NOTE: Durable Config currently requires a managed runtime; we use `nodejs24.x`
+    # with `AWS_LAMBDA_EXEC_WRAPPER=/var/task/bootstrap` to run the Rust bootstrap.
+    Runtime: nodejs24.x
+    Handler: bootstrap
+    Architectures:
+      - !Ref Architecture
+    Timeout: 30
+    MemorySize: 128
+    DurableConfig:
+      ExecutionTimeout: 300
+      RetentionPeriodInDays: 7
+    Environment:
+      Variables:
+        RUST_LOG: !Ref RustLog
+        AWS_LAMBDA_EXEC_WRAPPER: /var/task/bootstrap
+
+Resources:
+  MapOperationsExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: map_operations
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  ParallelExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: parallel
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  ParallelFirstSuccessfulExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: parallel_first_successful
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  MapWithFailureToleranceExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: map_with_failure_tolerance
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  WaitForConditionExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: wait_for_condition
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  MapWithCustomSerdesExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: map_with_custom_serdes
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  WaitForCallbackHeartbeatExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: wait_for_callback_heartbeat
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  WaitForCallbackMultipleInvocationsExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: wait_for_callback_multiple_invocations
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  BlockExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: block_example
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  InvokeTargetExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: invoke_target
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  InvokeCallerExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: invoke_caller
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !Join [":", [!GetAtt InvokeTargetExampleFunction.Arn, "$LATEST"]]
+      Environment:
+        Variables:
+          INVOKE_TARGET_FUNCTION: !Join [":", [!GetAtt InvokeTargetExampleFunction.Arn, "$LATEST"]]
+
+  HelloWorldExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: hello_world
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  CallbackExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: callback_example
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  StepRetryExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: step_retry
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+  ChildContextExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: child_context
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
+Outputs:
+  MapOperationsExampleFunctionArn:
+    Description: Map operations example function ARN
+    Value: !GetAtt MapOperationsExampleFunction.Arn
+  ParallelExampleFunctionArn:
+    Description: Parallel example function ARN
+    Value: !GetAtt ParallelExampleFunction.Arn
+  ParallelFirstSuccessfulExampleFunctionArn:
+    Description: Parallel first successful example function ARN
+    Value: !GetAtt ParallelFirstSuccessfulExampleFunction.Arn
+  MapWithFailureToleranceExampleFunctionArn:
+    Description: Map with failure tolerance example function ARN
+    Value: !GetAtt MapWithFailureToleranceExampleFunction.Arn
+  WaitForConditionExampleFunctionArn:
+    Description: Wait for condition example function ARN
+    Value: !GetAtt WaitForConditionExampleFunction.Arn
+  MapWithCustomSerdesExampleFunctionArn:
+    Description: Map with custom serdes example function ARN
+    Value: !GetAtt MapWithCustomSerdesExampleFunction.Arn
+  WaitForCallbackHeartbeatExampleFunctionArn:
+    Description: Wait for callback heartbeat example function ARN
+    Value: !GetAtt WaitForCallbackHeartbeatExampleFunction.Arn
+  WaitForCallbackMultipleInvocationsExampleFunctionArn:
+    Description: Wait for callback multiple invocations example function ARN
+    Value: !GetAtt WaitForCallbackMultipleInvocationsExampleFunction.Arn
+  BlockExampleFunctionArn:
+    Description: Block example function ARN
+    Value: !GetAtt BlockExampleFunction.Arn
+  InvokeTargetExampleFunctionArn:
+    Description: Invoke target example function ARN
+    Value: !GetAtt InvokeTargetExampleFunction.Arn
+  InvokeCallerExampleFunctionArn:
+    Description: Invoke caller example function ARN
+    Value: !GetAtt InvokeCallerExampleFunction.Arn
+  HelloWorldExampleFunctionArn:
+    Description: Hello World example function ARN
+    Value: !GetAtt HelloWorldExampleFunction.Arn
+  CallbackExampleFunctionArn:
+    Description: Callback example function ARN
+    Value: !GetAtt CallbackExampleFunction.Arn
+  StepRetryExampleFunctionArn:
+    Description: Step retry example function ARN
+    Value: !GetAtt StepRetryExampleFunction.Arn
+  ChildContextExampleFunctionArn:
+    Description: Child context example function ARN
+    Value: !GetAtt ChildContextExampleFunction.Arn

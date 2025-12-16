@@ -1,0 +1,12 @@
+flowchart TD
+    n_217d24b8_a17d_3b_start([Start])
+    subgraph n_f97d08f38581da33["batch-processing-context"]
+        n_ff050f37daf31dc9_Step_3["process-item-0"]
+        n_ff050f37daf31dc9_Step_4["process-item-0"]
+        n_4119b1c844bd9e83_Step_5["process-item-1"]
+        n_4119b1c844bd9e83_Step_6["process-item-1"]
+        n_ff4599e5db8e5937_Step_7["process-item-2"]
+        n_ff4599e5db8e5937_Step_8["process-item-2"]
+    end
+    n_217d24b8_a17d_3b_end([Success])
+    n_217d24b8_a17d_3b_start --> n_f97d08f38581da33 --> n_217d24b8_a17d_3b_end

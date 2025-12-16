@@ -1,0 +1,22 @@
+flowchart TD
+    n_8098264a_445b_31_start([Start])
+    n_17c274e64229e5be_Wait_2[/"wait-invocation-1"/]
+    n_17c274e64229e5be_Wait_4[/"wait-invocation-1"/]
+    subgraph n_ff4512d1af6d286c["first-callback"]
+        n_762f74c01672d4b5_Call_6{{"762f74c0"}}
+        n_6b399a48552e0750_Step_7["submitter"]
+        n_762f74c01672d4b5_Call_9{{"762f74c0"}}
+    end
+    n_4b3cf5cac5326de4_Step_11["process-callback-data"]
+    n_4b96114fdcef8408_Wait_12[/"wait-invocation-2"/]
+    n_4b96114fdcef8408_Wait_14[/"wait-invocation-2"/]
+    n_3b97458d6e28ab19_Step_15["process-callback-data"]
+    n_730cfa75006c3705_Wait_16[/"wait-invocation-2"/]
+    n_730cfa75006c3705_Wait_18[/"wait-invocation-2"/]
+    subgraph n_ccbfb1c4cb16c10e["second-callback"]
+        n_56ae2f4d7b143e34_Call_20{{"56ae2f4d"}}
+        n_447ec07d7a602c60_Step_21["submitter"]
+        n_56ae2f4d7b143e34_Call_23{{"56ae2f4d"}}
+    end
+    n_8098264a_445b_31_end([Success])
+    n_8098264a_445b_31_start --> n_17c274e64229e5be_Wait_2 --> n_17c274e64229e5be_Wait_4 --> n_ff4512d1af6d286c --> n_4b3cf5cac5326de4_Step_11 --> n_4b96114fdcef8408_Wait_12 --> n_4b96114fdcef8408_Wait_14 --> n_3b97458d6e28ab19_Step_15 --> n_730cfa75006c3705_Wait_16 --> n_730cfa75006c3705_Wait_18 --> n_ccbfb1c4cb16c10e --> n_8098264a_445b_31_end

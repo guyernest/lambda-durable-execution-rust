@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "durable-rust"
+resolve_s3 = true
+s3_prefix = "durable-rust"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Architecture=\"arm64\" RustLog=\"info\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"
+beta_features = "true"

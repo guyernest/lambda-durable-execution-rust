@@ -1,0 +1,11 @@
+flowchart TD
+    n_4e2c46bb_bab6_38_start([Start])
+    subgraph n_a4009b439a71f8ca["parent_block"]
+        n_90a91fb3a13f1bed_Step_3["nested_step"]
+        subgraph n_9b9dcaf2ae8e1bb5["nested_block"]
+            n_478786cb75e45f14_Wait_5[/"478786cb"/]
+            n_478786cb75e45f14_Wait_7[/"478786cb"/]
+        end
+    end
+    n_4e2c46bb_bab6_38_end([Success])
+    n_4e2c46bb_bab6_38_start --> n_a4009b439a71f8ca --> n_4e2c46bb_bab6_38_end
