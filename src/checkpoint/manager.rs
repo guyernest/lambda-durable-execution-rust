@@ -847,4 +847,80 @@ mod tests {
 
         assert_eq!(result.reason, TerminationReason::CheckpointFailed);
     }
+
+    #[tokio::test]
+    async fn test_has_finished_ancestor_detects_parent_completion() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+
+        let parent_op = Operation {
+            id: "parent-1".to_string(),
+            parent_id: None,
+            name: None,
+            operation_type: OperationType::Step,
+            sub_type: None,
+            status: OperationStatus::Succeeded,
+            step_details: None,
+            callback_details: None,
+            wait_details: None,
+            execution_details: None,
+            context_details: None,
+            chained_invoke_details: None,
+        };
+
+        let mut step_data = HashMap::new();
+        step_data.insert(parent_op.id.clone(), parent_op);
+
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager,
+            "token-0".to_string(),
+            step_data,
+        );
+
+        let update = OperationUpdate::builder()
+            .id("child-1")
+            .parent_id("parent-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .build()
+            .unwrap();
+
+        assert!(manager.has_finished_ancestor(&update).await);
+    }
+
+    #[tokio::test]
+    async fn test_mark_awaited_transitions_idle_state() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager,
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        {
+            let mut operations = manager.operations.lock().await;
+            operations.insert(
+                "op-1".to_string(),
+                OperationInfo {
+                    id: "op-1".to_string(),
+                    parent_id: None,
+                    operation_type: OperationType::Wait,
+                    lifecycle: OperationLifecycle::IdleNotAwaited,
+                    awaited: false,
+                },
+            );
+        }
+
+        manager.mark_awaited("op-1").await;
+
+        let operations = manager.operations.lock().await;
+        let info = operations.get("op-1").expect("operation should exist");
+        assert!(info.awaited);
+        assert_eq!(info.lifecycle, OperationLifecycle::IdleAwaited);
+    }
 }
