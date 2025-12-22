@@ -3,6 +3,8 @@
 use crate::error::{DurableError, DurableResult};
 use crate::termination::TerminationManager;
 use crate::types::{Operation, OperationAction, OperationStatus, OperationType, OperationUpdate};
+use aws_sdk_lambda::error::SdkError;
+use aws_sdk_lambda::operation::checkpoint_durable_execution::CheckpointDurableExecutionError;
 use aws_sdk_lambda::Client as LambdaClient;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,7 +134,7 @@ impl CheckpointManager {
     pub async fn checkpoint(&self, step_id: String, update: OperationUpdate) -> DurableResult<()> {
         // Check if we're terminating
         if self.is_terminating.load(Ordering::SeqCst) {
-            debug!("Checkpoint called while terminating, blocking forever");
+            warn!("Checkpoint called while terminating, blocking forever");
             // Return a future that never resolves
             std::future::pending::<()>().await;
             unreachable!()
@@ -140,7 +142,7 @@ impl CheckpointManager {
 
         // Check for finished ancestors
         if self.has_finished_ancestor(&update).await {
-            debug!("Operation has finished ancestor, blocking forever");
+            warn!("Operation has finished ancestor, blocking forever");
             std::future::pending::<()>().await;
             unreachable!()
         }
@@ -190,14 +192,14 @@ impl CheckpointManager {
     ) -> DurableResult<()> {
         // Check if we're terminating
         if self.is_terminating.load(Ordering::SeqCst) {
-            debug!("Checkpoint called while terminating, blocking forever");
+            warn!("Checkpoint called while terminating, blocking forever");
             std::future::pending::<()>().await;
             unreachable!()
         }
 
         // Check for finished ancestors
         if self.has_finished_ancestor(&update).await {
-            debug!("Operation has finished ancestor, blocking forever");
+            warn!("Operation has finished ancestor, blocking forever");
             std::future::pending::<()>().await;
             unreachable!()
         }
@@ -264,9 +266,20 @@ impl CheckpointManager {
     }
 
     /// Hash an operation ID for storage.
+    ///
+    /// We use SHA-256 truncated to 128 bits (32 hex chars). The JS SDK uses MD5-16 for
+    /// speed and the Python SDK uses BLAKE2b-64; SHA-256 is widely understood and avoids
+    /// MD5 while keeping IDs reasonably short.
     pub fn hash_id(id: &str) -> String {
-        let digest = md5::compute(id.as_bytes());
-        format!("{:x}", digest)[..16].to_string()
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+
+        let digest = Sha256::digest(id.as_bytes());
+        let mut hex = String::with_capacity(32);
+        for byte in digest.iter().take(16) {
+            let _ = write!(hex, "{:02x}", byte);
+        }
+        hex
     }
 
     /// Check if an operation has a finished (succeeded/failed) ancestor.
@@ -520,13 +533,14 @@ impl CheckpointManager {
 
         for update in updates {
             let id = update.id.clone();
-            if !by_id.contains_key(&id) {
-                order.push(id.clone());
-                by_id.insert(id, update);
-                continue;
-            }
-
-            let existing = by_id.get_mut(&id).expect("present");
+            let existing = match by_id.entry(id.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    order.push(id);
+                    entry.insert(update);
+                    continue;
+                }
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            };
             if existing.operation_type != update.operation_type {
                 return Err(DurableError::ContextValidationError {
                     message: format!(
@@ -572,7 +586,7 @@ impl CheckpointManager {
 
         if by_id.len() != order.len() {
             warn!(
-                "Coalesced {} updates into {} (duplicate operation ids in batch)",
+                "Coalesced updates from {} into {} (duplicate operation ids in batch)",
                 order.len(),
                 by_id.len()
             );
@@ -624,8 +638,58 @@ impl CheckpointManager {
     }
 
     /// Check if an error is recoverable (should retry).
-    fn is_recoverable_error<E: std::fmt::Display>(&self, error: &E) -> bool {
-        let error_str = error.to_string().to_lowercase();
+    fn is_recoverable_error(&self, error: &SdkError<CheckpointDurableExecutionError>) -> bool {
+        match error {
+            SdkError::TimeoutError(_)
+            | SdkError::DispatchFailure(_)
+            | SdkError::ResponseError(_) => true,
+            SdkError::ConstructionFailure(_) => false,
+            SdkError::ServiceError(context) => {
+                let status = context.raw().status();
+                let status_code = status.as_u16();
+
+                match context.err() {
+                    CheckpointDurableExecutionError::TooManyRequestsException(_) => true,
+                    CheckpointDurableExecutionError::ServiceException(_) => true,
+                    CheckpointDurableExecutionError::InvalidParameterValueException(inner) => {
+                        let message = inner
+                            .message()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| inner.to_string());
+                        if message.starts_with("Invalid Checkpoint Token") {
+                            return true;
+                        }
+
+                        if status.is_client_error() && status_code != 429 {
+                            return false;
+                        }
+                        if status.is_server_error() || status_code == 429 {
+                            return true;
+                        }
+
+                        self.is_recoverable_message(&message)
+                    }
+                    other => {
+                        if status.is_server_error() || status_code == 429 {
+                            return true;
+                        }
+                        if status.is_client_error() && status_code != 429 {
+                            return false;
+                        }
+                        let message =
+                            aws_smithy_types::error::metadata::ProvideErrorMetadata::message(other)
+                                .map(str::to_string)
+                                .unwrap_or_else(|| other.to_string());
+                        self.is_recoverable_message(&message)
+                    }
+                }
+            }
+            _ => self.is_recoverable_message(&error.to_string()),
+        }
+    }
+
+    fn is_recoverable_message(&self, message: &str) -> bool {
+        let error_str = message.to_lowercase();
         error_str.contains("throttl")
             || error_str.contains("rate")
             || error_str.contains("timeout")
@@ -869,7 +933,13 @@ impl CheckpointManager {
             aws_sdk_lambda::types::OperationType::ChainedInvoke => OperationType::ChainedInvoke,
             aws_sdk_lambda::types::OperationType::Context => OperationType::Context,
             aws_sdk_lambda::types::OperationType::Execution => OperationType::Execution,
-            _ => OperationType::Step, // Default fallback
+            _ => {
+                warn!(
+                    "Unknown SDK operation type {:?}, defaulting to Step",
+                    op_type
+                );
+                OperationType::Step
+            }
         }
     }
 
@@ -884,7 +954,13 @@ impl CheckpointManager {
             aws_sdk_lambda::types::OperationStatus::Pending => OperationStatus::Pending,
             aws_sdk_lambda::types::OperationStatus::Succeeded => OperationStatus::Succeeded,
             aws_sdk_lambda::types::OperationStatus::Failed => OperationStatus::Failed,
-            _ => OperationStatus::Started, // Default fallback
+            _ => {
+                warn!(
+                    "Unknown SDK operation status {:?}, defaulting to Started",
+                    status
+                );
+                OperationStatus::Started
+            }
         }
     }
 }
@@ -919,7 +995,7 @@ mod tests {
 
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
-        assert_eq!(id1.len(), 16);
+        assert_eq!(id1.len(), 32);
     }
 
     #[test]

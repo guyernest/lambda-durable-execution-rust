@@ -185,7 +185,7 @@ impl ExponentialBackoff {
             JitterStrategy::Half => {
                 use rand::Rng;
                 let half = capped_delay_secs / 2.0;
-                half + rand::rng().random_range(0.0..=half)
+                rand::rng().random_range(half..=capped_delay_secs)
             }
             JitterStrategy::Equal => {
                 use rand::Rng;

@@ -2,7 +2,7 @@
 
 use crate::error::DurableError;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 
 type CheckpointTerminatingCallback = Box<dyn Fn() + Send + Sync>;
 
@@ -95,9 +95,6 @@ pub struct TerminationManager {
     termination_tx: watch::Sender<Option<TerminationResult>>,
     termination_rx: watch::Receiver<Option<TerminationResult>>,
 
-    /// Notify for checkpoint termination callback.
-    checkpoint_terminating_notify: Arc<Notify>,
-
     /// Callback to set checkpoint manager as terminating.
     checkpoint_terminating_callback: Arc<Mutex<Option<CheckpointTerminatingCallback>>>,
 }
@@ -110,7 +107,6 @@ impl TerminationManager {
             terminated: Arc::new(Mutex::new(false)),
             termination_tx: tx,
             termination_rx: rx,
-            checkpoint_terminating_notify: Arc::new(Notify::new()),
             checkpoint_terminating_callback: Arc::new(Mutex::new(None)),
         }
     }
@@ -137,9 +133,6 @@ impl TerminationManager {
         if let Some(callback) = self.checkpoint_terminating_callback.lock().await.as_ref() {
             callback();
         }
-
-        // Notify checkpoint terminating
-        self.checkpoint_terminating_notify.notify_waiters();
 
         // Send termination signal
         let _ = self.termination_tx.send(Some(result));
@@ -245,7 +238,6 @@ impl Clone for TerminationManager {
             terminated: Arc::clone(&self.terminated),
             termination_tx: self.termination_tx.clone(),
             termination_rx: self.termination_rx.clone(),
-            checkpoint_terminating_notify: Arc::clone(&self.checkpoint_terminating_notify),
             checkpoint_terminating_callback: Arc::clone(&self.checkpoint_terminating_callback),
         }
     }

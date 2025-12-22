@@ -1,6 +1,6 @@
 use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
-use crate::types::DurableExecutionInvocationInput;
+use crate::types::{DurableExecutionInvocationInput, Duration};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -50,6 +50,106 @@ async fn make_replay_context(
         .await
         .expect("execution context should initialize");
     DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)))
+}
+
+#[tokio::test]
+async fn test_step_replay_returns_cached_result() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let result = serde_json::to_string(&123u32).unwrap();
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Result": result, "Attempt": 0 },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let value: u32 = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            None::<crate::types::StepConfig<u32>>,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 123u32);
+}
+
+#[tokio::test]
+async fn test_step_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "FAILED",
+        "StepDetails": {
+            "Attempt": 1,
+            "Error": { "ErrorType": "Error", "ErrorMessage": "boom" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let err = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            None::<crate::types::StepConfig<u32>>,
+        )
+        .await
+        .expect_err("step should fail in replay");
+
+    match err {
+        crate::error::DurableError::StepFailed {
+            message, attempts, ..
+        } => {
+            assert_eq!(message, "boom");
+            assert_eq!(attempts, 2);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_wait_replay_succeeded_returns_ok() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let wait_op = json!({
+        "Id": hashed_id,
+        "Type": "WAIT",
+        "Status": "SUCCEEDED",
+    });
+
+    let ctx = make_replay_context(arn, vec![wait_op]).await;
+    ctx.wait(Some("wait"), Duration::seconds(5)).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_wait_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let wait_op = json!({
+        "Id": hashed_id,
+        "Type": "WAIT",
+        "Status": "FAILED",
+    });
+
+    let ctx = make_replay_context(arn, vec![wait_op]).await;
+    let err = ctx
+        .wait(Some("wait"), Duration::seconds(5))
+        .await
+        .expect_err("wait should fail in replay");
+    assert!(err.to_string().contains("Wait failed in replay"));
 }
 
 #[tokio::test]
