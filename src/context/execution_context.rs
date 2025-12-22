@@ -292,4 +292,40 @@ mod tests {
         assert_eq!(calls[0].marker, "page-1");
         assert_eq!(calls[0].max_items, GET_STATE_MAX_ITEMS);
     }
+
+    #[tokio::test]
+    async fn test_execution_context_no_pagination_stays_execution_mode() {
+        let mock = Arc::new(MockLambdaService::new());
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: crate::types::InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some("{}".to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let ctx = ExecutionContext::new(&input, mock.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+
+        assert_eq!(ctx.get_mode().await, ExecutionMode::Execution);
+        assert!(mock.get_state_calls().is_empty());
+    }
 }

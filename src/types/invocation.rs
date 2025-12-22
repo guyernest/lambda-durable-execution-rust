@@ -609,4 +609,33 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_operation_update_builder_rejects_negative_wait() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Wait)
+            .action(OperationAction::Start)
+            .wait_options(WaitUpdateOptions {
+                wait_seconds: Some(-1),
+            })
+            .build();
+
+        assert!(update.is_err());
+    }
+
+    #[test]
+    fn test_operation_update_builder_rejects_negative_timeout() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Callback)
+            .action(OperationAction::Start)
+            .callback_options(CallbackUpdateOptions {
+                timeout_seconds: Some(-10),
+                heartbeat_timeout_seconds: None,
+            })
+            .build();
+
+        assert!(update.is_err());
+    }
 }
