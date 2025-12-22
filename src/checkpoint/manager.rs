@@ -2,10 +2,9 @@
 
 use crate::error::{DurableError, DurableResult};
 use crate::termination::TerminationManager;
-use crate::types::{Operation, OperationAction, OperationStatus, OperationType, OperationUpdate};
-use aws_sdk_lambda::error::SdkError;
-use aws_sdk_lambda::operation::checkpoint_durable_execution::CheckpointDurableExecutionError;
-use aws_sdk_lambda::Client as LambdaClient;
+use crate::types::{
+    LambdaService, Operation, OperationAction, OperationStatus, OperationType, OperationUpdate,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -72,8 +71,8 @@ pub struct CheckpointManager {
     /// ARN of the durable execution.
     durable_execution_arn: String,
 
-    /// Lambda client for API calls.
-    lambda_client: Arc<LambdaClient>,
+    /// Lambda service for API calls.
+    lambda_service: Arc<dyn LambdaService>,
 
     /// Termination manager reference.
     termination_manager: Arc<TerminationManager>,
@@ -107,14 +106,14 @@ impl CheckpointManager {
     /// Create a new checkpoint manager.
     pub fn new(
         durable_execution_arn: String,
-        lambda_client: Arc<LambdaClient>,
+        lambda_service: Arc<dyn LambdaService>,
         termination_manager: Arc<TerminationManager>,
         checkpoint_token: String,
         step_data: HashMap<String, Operation>,
     ) -> Self {
         Self {
             durable_execution_arn,
-            lambda_client,
+            lambda_service,
             termination_manager,
             checkpoint_token: Arc::new(Mutex::new(checkpoint_token)),
             step_data: Arc::new(Mutex::new(step_data)),
@@ -462,39 +461,16 @@ impl CheckpointManager {
 
         let updates = self.coalesce_updates(updates)?;
 
-        // Convert our updates to SDK types
-        let sdk_updates: Vec<aws_sdk_lambda::types::OperationUpdate> = updates
-            .into_iter()
-            .map(|u| self.to_sdk_operation_update(u))
-            .collect::<Result<Vec<_>, _>>()?;
-
         debug!(
             "Checkpointing {} updates to {}",
-            sdk_updates.len(),
+            updates.len(),
             self.durable_execution_arn
         );
 
         let response = self
-            .lambda_client
-            .checkpoint_durable_execution()
-            .durable_execution_arn(&self.durable_execution_arn)
-            .checkpoint_token(&token)
-            .set_updates(if sdk_updates.is_empty() {
-                None
-            } else {
-                Some(sdk_updates)
-            })
-            .send()
-            .await
-            .map_err(|e| {
-                let is_recoverable = self.is_recoverable_error(&e);
-                let debug = format!("{e:?}");
-                DurableError::checkpoint_failed(
-                    format!("Failed to checkpoint: {}", debug),
-                    is_recoverable,
-                    Some(e),
-                )
-            })?;
+            .lambda_service
+            .checkpoint_durable_execution(&self.durable_execution_arn, &token, updates)
+            .await?;
 
         // Update checkpoint token
         if let Some(new_token) = response.checkpoint_token {
@@ -503,16 +479,9 @@ impl CheckpointManager {
 
         // Update step data from response
         if let Some(new_state) = response.new_execution_state {
-            if let Some(operations) = new_state.operations {
-                let mut step_data = self.step_data.lock().await;
-                for op in operations {
-                    // op.id is String in the AWS SDK
-                    let id = &op.id;
-                    // Convert SDK operation to our type
-                    if let Ok(operation) = self.sdk_operation_to_operation(&op) {
-                        step_data.insert(id.clone(), operation);
-                    }
-                }
+            let mut step_data = self.step_data.lock().await;
+            for op in new_state.operations {
+                step_data.insert(op.id.clone(), op);
             }
         }
 
@@ -636,340 +605,13 @@ impl CheckpointManager {
 
         base + id + parent_id + name + payload
     }
-
-    /// Check if an error is recoverable (should retry).
-    fn is_recoverable_error(&self, error: &SdkError<CheckpointDurableExecutionError>) -> bool {
-        match error {
-            SdkError::TimeoutError(_)
-            | SdkError::DispatchFailure(_)
-            | SdkError::ResponseError(_) => true,
-            SdkError::ConstructionFailure(_) => false,
-            SdkError::ServiceError(context) => {
-                let status = context.raw().status();
-                let status_code = status.as_u16();
-
-                match context.err() {
-                    CheckpointDurableExecutionError::TooManyRequestsException(_) => true,
-                    CheckpointDurableExecutionError::ServiceException(_) => true,
-                    CheckpointDurableExecutionError::InvalidParameterValueException(inner) => {
-                        let message = inner
-                            .message()
-                            .map(str::to_string)
-                            .unwrap_or_else(|| inner.to_string());
-                        if message.starts_with("Invalid Checkpoint Token") {
-                            return true;
-                        }
-
-                        if status.is_client_error() && status_code != 429 {
-                            return false;
-                        }
-                        if status.is_server_error() || status_code == 429 {
-                            return true;
-                        }
-
-                        self.is_recoverable_message(&message)
-                    }
-                    other => {
-                        if status.is_server_error() || status_code == 429 {
-                            return true;
-                        }
-                        if status.is_client_error() && status_code != 429 {
-                            return false;
-                        }
-                        let message =
-                            aws_smithy_types::error::metadata::ProvideErrorMetadata::message(other)
-                                .map(str::to_string)
-                                .unwrap_or_else(|| other.to_string());
-                        self.is_recoverable_message(&message)
-                    }
-                }
-            }
-            _ => self.is_recoverable_message(&error.to_string()),
-        }
-    }
-
-    fn is_recoverable_message(&self, message: &str) -> bool {
-        let error_str = message.to_lowercase();
-        error_str.contains("throttl")
-            || error_str.contains("rate")
-            || error_str.contains("timeout")
-            || error_str.contains("temporary")
-    }
-
-    /// Convert our OperationUpdate to SDK type.
-    fn to_sdk_operation_update(
-        &self,
-        update: OperationUpdate,
-    ) -> DurableResult<aws_sdk_lambda::types::OperationUpdate> {
-        let builder = aws_sdk_lambda::types::OperationUpdate::builder()
-            .id(&update.id)
-            .r#type(self.to_sdk_operation_type(update.operation_type))
-            .action(self.to_sdk_operation_action(update.action));
-
-        let builder = if let Some(parent_id) = update.parent_id {
-            builder.parent_id(parent_id)
-        } else {
-            builder
-        };
-
-        let builder = if let Some(name) = update.name {
-            builder.name(name)
-        } else {
-            builder
-        };
-
-        let builder = if let Some(sub_type) = update.sub_type {
-            builder.sub_type(sub_type)
-        } else {
-            builder
-        };
-
-        let builder = if let Some(payload) = update.payload {
-            builder.payload(payload)
-        } else {
-            builder
-        };
-
-        let builder = if let Some(error) = update.error {
-            builder.error(
-                aws_sdk_lambda::types::ErrorObject::builder()
-                    .error_type(&error.error_type)
-                    .error_message(&error.error_message)
-                    .build(),
-            )
-        } else {
-            builder
-        };
-
-        let builder = if let Some(ctx_opts) = update.context_options {
-            let mut b = aws_sdk_lambda::types::ContextOptions::builder();
-            if let Some(replay_children) = ctx_opts.replay_children {
-                b = b.replay_children(replay_children);
-            }
-            builder.context_options(b.build())
-        } else {
-            builder
-        };
-
-        let builder = if let Some(step_opts) = update.step_options {
-            let mut b = aws_sdk_lambda::types::StepOptions::builder();
-            if let Some(secs) = step_opts.next_attempt_delay_seconds {
-                b = b.next_attempt_delay_seconds(secs);
-            }
-            builder.step_options(b.build())
-        } else {
-            builder
-        };
-
-        let builder = if let Some(wait_opts) = update.wait_options {
-            let mut b = aws_sdk_lambda::types::WaitOptions::builder();
-            if let Some(secs) = wait_opts.wait_seconds {
-                b = b.wait_seconds(secs);
-            }
-            builder.wait_options(b.build())
-        } else {
-            builder
-        };
-
-        let builder = if let Some(cb_opts) = update.callback_options {
-            let mut b = aws_sdk_lambda::types::CallbackOptions::builder();
-            if let Some(secs) = cb_opts.timeout_seconds {
-                b = b.timeout_seconds(secs);
-            }
-            if let Some(secs) = cb_opts.heartbeat_timeout_seconds {
-                b = b.heartbeat_timeout_seconds(secs);
-            }
-            builder.callback_options(b.build())
-        } else {
-            builder
-        };
-
-        let builder = if let Some(invoke_opts) = update.chained_invoke_options {
-            let mut b = aws_sdk_lambda::types::ChainedInvokeOptions::builder()
-                .function_name(invoke_opts.function_name);
-            if let Some(tenant_id) = invoke_opts.tenant_id {
-                b = b.tenant_id(tenant_id);
-            }
-            let opts = b.build().map_err(|e| {
-                DurableError::Internal(format!("Failed to build chained invoke options: {}", e))
-            })?;
-            builder.chained_invoke_options(opts)
-        } else {
-            builder
-        };
-
-        builder
-            .build()
-            .map_err(|e| DurableError::Internal(format!("Failed to build operation update: {}", e)))
-    }
-
-    /// Convert our OperationType to SDK type.
-    fn to_sdk_operation_type(
-        &self,
-        op_type: OperationType,
-    ) -> aws_sdk_lambda::types::OperationType {
-        match op_type {
-            OperationType::Step => aws_sdk_lambda::types::OperationType::Step,
-            OperationType::Wait => aws_sdk_lambda::types::OperationType::Wait,
-            OperationType::Callback => aws_sdk_lambda::types::OperationType::Callback,
-            OperationType::ChainedInvoke => aws_sdk_lambda::types::OperationType::ChainedInvoke,
-            OperationType::Context => aws_sdk_lambda::types::OperationType::Context,
-            OperationType::Execution => aws_sdk_lambda::types::OperationType::Execution,
-        }
-    }
-
-    /// Convert our OperationAction to SDK type.
-    fn to_sdk_operation_action(
-        &self,
-        action: OperationAction,
-    ) -> aws_sdk_lambda::types::OperationAction {
-        match action {
-            OperationAction::Start => aws_sdk_lambda::types::OperationAction::Start,
-            OperationAction::Retry => aws_sdk_lambda::types::OperationAction::Retry,
-            OperationAction::Succeed => aws_sdk_lambda::types::OperationAction::Succeed,
-            OperationAction::Fail => aws_sdk_lambda::types::OperationAction::Fail,
-            OperationAction::Cancel => aws_sdk_lambda::types::OperationAction::Cancel,
-        }
-    }
-
-    /// Convert SDK Operation to our type.
-    fn sdk_operation_to_operation(
-        &self,
-        op: &aws_sdk_lambda::types::Operation,
-    ) -> DurableResult<Operation> {
-        Ok(Operation {
-            id: op.id.clone(),
-            parent_id: op.parent_id.clone(),
-            name: op.name.clone(),
-            operation_type: self.sdk_operation_type_to_operation_type(op.r#type.clone()),
-            sub_type: op.sub_type.clone(),
-            status: self.sdk_operation_status_to_operation_status(op.status.clone()),
-            step_details: op.step_details.as_ref().map(|d| crate::types::StepDetails {
-                attempt: Some(d.attempt as u32),
-                next_attempt_timestamp: d
-                    .next_attempt_timestamp
-                    .as_ref()
-                    .map(|ts| crate::types::FlexibleTimestamp::String(ts.to_string())),
-                result: d.result.clone(),
-                error: d
-                    .error
-                    .as_ref()
-                    .map(|e| self.sdk_error_object_to_error_object(e)),
-            }),
-            callback_details: op
-                .callback_details
-                .as_ref()
-                .map(|d| crate::types::CallbackDetails {
-                    callback_id: d.callback_id.clone(),
-                    result: d.result.clone(),
-                    error: d
-                        .error
-                        .as_ref()
-                        .map(|e| self.sdk_error_object_to_error_object(e)),
-                }),
-            wait_details: op.wait_details.as_ref().map(|d| crate::types::WaitDetails {
-                scheduled_end_timestamp: d
-                    .scheduled_end_timestamp
-                    .as_ref()
-                    .map(|ts| crate::types::FlexibleTimestamp::String(ts.to_string())),
-            }),
-            execution_details: op.execution_details.as_ref().map(|d| {
-                crate::types::ExecutionDetails {
-                    input_payload: d.input_payload.clone(),
-                    // Note: output_payload is not available from the AWS SDK's ExecutionDetails
-                    // It's typically populated when the execution completes
-                    output_payload: None,
-                }
-            }),
-            context_details: op
-                .context_details
-                .as_ref()
-                .map(|d| crate::types::ContextDetails {
-                    replay_children: d.replay_children,
-                    result: d.result.clone(),
-                    error: d
-                        .error
-                        .as_ref()
-                        .map(|e| self.sdk_error_object_to_error_object(e)),
-                }),
-            chained_invoke_details: op.chained_invoke_details.as_ref().map(|d| {
-                crate::types::ChainedInvokeDetails {
-                    result: d.result.clone(),
-                    error: d
-                        .error
-                        .as_ref()
-                        .map(|e| self.sdk_error_object_to_error_object(e)),
-                }
-            }),
-        })
-    }
-
-    fn sdk_error_object_to_error_object(
-        &self,
-        e: &aws_sdk_lambda::types::ErrorObject,
-    ) -> crate::error::ErrorObject {
-        crate::error::ErrorObject {
-            error_type: e.error_type.clone().unwrap_or_else(|| "Error".to_string()),
-            error_message: e
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "Unknown error".to_string()),
-            details: e
-                .error_data
-                .clone()
-                .or_else(|| e.stack_trace.as_ref().map(|st| st.join("\n"))),
-        }
-    }
-
-    /// Convert SDK OperationType to our type.
-    fn sdk_operation_type_to_operation_type(
-        &self,
-        op_type: aws_sdk_lambda::types::OperationType,
-    ) -> OperationType {
-        match op_type {
-            aws_sdk_lambda::types::OperationType::Step => OperationType::Step,
-            aws_sdk_lambda::types::OperationType::Wait => OperationType::Wait,
-            aws_sdk_lambda::types::OperationType::Callback => OperationType::Callback,
-            aws_sdk_lambda::types::OperationType::ChainedInvoke => OperationType::ChainedInvoke,
-            aws_sdk_lambda::types::OperationType::Context => OperationType::Context,
-            aws_sdk_lambda::types::OperationType::Execution => OperationType::Execution,
-            _ => {
-                warn!(
-                    "Unknown SDK operation type {:?}, defaulting to Step",
-                    op_type
-                );
-                OperationType::Step
-            }
-        }
-    }
-
-    /// Convert SDK OperationStatus to our type.
-    fn sdk_operation_status_to_operation_status(
-        &self,
-        status: aws_sdk_lambda::types::OperationStatus,
-    ) -> OperationStatus {
-        match status {
-            aws_sdk_lambda::types::OperationStatus::Ready => OperationStatus::Ready,
-            aws_sdk_lambda::types::OperationStatus::Started => OperationStatus::Started,
-            aws_sdk_lambda::types::OperationStatus::Pending => OperationStatus::Pending,
-            aws_sdk_lambda::types::OperationStatus::Succeeded => OperationStatus::Succeeded,
-            aws_sdk_lambda::types::OperationStatus::Failed => OperationStatus::Failed,
-            _ => {
-                warn!(
-                    "Unknown SDK operation status {:?}, defaulting to Started",
-                    status
-                );
-                OperationStatus::Started
-            }
-        }
-    }
 }
 
 impl Clone for CheckpointManager {
     fn clone(&self) -> Self {
         Self {
             durable_execution_arn: self.durable_execution_arn.clone(),
-            lambda_client: Arc::clone(&self.lambda_client),
+            lambda_service: Arc::clone(&self.lambda_service),
             termination_manager: Arc::clone(&self.termination_manager),
             checkpoint_token: Arc::clone(&self.checkpoint_token),
             step_data: Arc::clone(&self.step_data),
@@ -986,6 +628,10 @@ impl Clone for CheckpointManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::termination::{TerminationManager, TerminationReason};
+    use std::collections::HashMap;
+    use std::time::Duration;
 
     #[test]
     fn test_hash_id() {
@@ -1005,5 +651,200 @@ mod tests {
             OperationLifecycle::NotStarted
         );
         assert_ne!(OperationLifecycle::Executing, OperationLifecycle::Completed);
+    }
+
+    #[test]
+    fn test_coalesce_updates_merges_fields() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager,
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        let update_start = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .name("step-name")
+            .parent_id("parent-1")
+            .build()
+            .unwrap();
+        let update_succeed = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Succeed)
+            .payload("{\"ok\":true}")
+            .build()
+            .unwrap();
+
+        let updates = manager
+            .coalesce_updates(vec![update_start, update_succeed])
+            .expect("coalesce should succeed");
+
+        assert_eq!(updates.len(), 1);
+        let merged = &updates[0];
+        assert_eq!(merged.action, OperationAction::Succeed);
+        assert_eq!(merged.name.as_deref(), Some("step-name"));
+        assert_eq!(merged.parent_id.as_deref(), Some("parent-1"));
+        assert_eq!(merged.payload.as_deref(), Some("{\"ok\":true}"));
+    }
+
+    #[test]
+    fn test_coalesce_updates_rejects_type_mismatch() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager,
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        let update_step = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .build()
+            .unwrap();
+        let update_wait = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Wait)
+            .action(OperationAction::Succeed)
+            .build()
+            .unwrap();
+
+        let err = manager
+            .coalesce_updates(vec![update_step, update_wait])
+            .expect_err("type mismatch should error");
+
+        match err {
+            DurableError::ContextValidationError { message } => {
+                assert!(message.contains("type mismatch"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_updates_token_and_step_data() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+
+        let op = Operation {
+            id: "op-1".to_string(),
+            parent_id: None,
+            name: None,
+            operation_type: OperationType::Step,
+            sub_type: None,
+            status: OperationStatus::Succeeded,
+            step_details: None,
+            callback_details: None,
+            wait_details: None,
+            execution_details: None,
+            context_details: None,
+            chained_invoke_details: None,
+        };
+
+        mock.expect_checkpoint(MockCheckpointConfig {
+            checkpoint_token: Some("token-1".to_string()),
+            operations: vec![op.clone()],
+            next_marker: None,
+            error: None,
+        });
+        mock.expect_checkpoint(MockCheckpointConfig::default());
+
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock.clone(),
+            termination_manager,
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        let update = OperationUpdate::builder()
+            .id(op.id.clone())
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Succeed)
+            .build()
+            .unwrap();
+
+        manager
+            .checkpoint(op.id.clone(), update)
+            .await
+            .expect("checkpoint should succeed");
+
+        let stored = manager.get_step_data(&op.id).await;
+        assert!(stored.is_some());
+        assert_eq!(stored.unwrap().status, OperationStatus::Succeeded);
+
+        let update2 = OperationUpdate::builder()
+            .id("op-2")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .build()
+            .unwrap();
+
+        manager
+            .checkpoint("op-2".to_string(), update2)
+            .await
+            .expect("checkpoint should succeed");
+
+        let calls = mock.checkpoint_calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].checkpoint_token, "token-0");
+        assert_eq!(calls[1].checkpoint_token, "token-1");
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_failure_triggers_termination() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+
+        mock.expect_checkpoint(MockCheckpointConfig {
+            error: Some(DurableError::checkpoint_failed(
+                "boom",
+                false,
+                None::<std::io::Error>,
+            )),
+            ..Default::default()
+        });
+
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager.clone(),
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .build()
+            .unwrap();
+
+        manager
+            .checkpoint("op-1".to_string(), update)
+            .await
+            .expect("checkpoint should return after failure");
+
+        let result = tokio::time::timeout(Duration::from_millis(50), async {
+            loop {
+                if let Some(result) = termination_manager.get_termination_result() {
+                    break result;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("termination should be triggered");
+
+        assert_eq!(result.reason, TerminationReason::CheckpointFailed);
     }
 }

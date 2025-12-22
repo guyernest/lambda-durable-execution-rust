@@ -225,6 +225,12 @@ pub mod runtime;
 pub mod termination;
 pub mod types;
 
+/// Test utilities and mocks (requires the `testutils` feature or test builds).
+#[cfg(any(test, feature = "testutils"))]
+pub mod mock {
+    pub use crate::types::mock::*;
+}
+
 /// Prelude module for convenient imports.
 ///
 /// Import everything you need with a single use statement:

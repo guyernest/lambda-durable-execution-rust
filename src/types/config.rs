@@ -1,7 +1,7 @@
 //! Configuration types for durable operations.
 
 use crate::retry::RetryStrategy;
-use crate::types::{BatchResult, Duration, Serdes};
+use crate::types::{BatchResult, Duration, LambdaService, RealLambdaService, Serdes};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -596,8 +596,8 @@ impl<T> std::fmt::Debug for WaitConditionConfig<T> {
 /// Configuration for durable execution.
 #[derive(Debug, Clone, Default)]
 pub struct DurableExecutionConfig {
-    /// Custom AWS Lambda client to use.
-    pub lambda_client: Option<aws_sdk_lambda::Client>,
+    /// Custom AWS Lambda service to use.
+    pub lambda_service: Option<Arc<dyn LambdaService>>,
 }
 
 impl DurableExecutionConfig {
@@ -608,7 +608,13 @@ impl DurableExecutionConfig {
 
     /// Set a custom Lambda client.
     pub fn with_lambda_client(mut self, client: aws_sdk_lambda::Client) -> Self {
-        self.lambda_client = Some(client);
+        self.lambda_service = Some(Arc::new(RealLambdaService::new(Arc::new(client))));
+        self
+    }
+
+    /// Set a custom Lambda service.
+    pub fn with_lambda_service(mut self, service: Arc<dyn LambdaService>) -> Self {
+        self.lambda_service = Some(service);
         self
     }
 }

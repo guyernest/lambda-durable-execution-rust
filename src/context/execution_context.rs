@@ -4,10 +4,8 @@ use crate::checkpoint::CheckpointManager;
 use crate::error::{DurableError, DurableResult};
 use crate::termination::TerminationManager;
 use crate::types::{
-    DurableExecutionInvocationInput, DurableLogger, ExecutionDetails, Operation, OperationStatus,
-    OperationType, TracingLogger,
+    DurableExecutionInvocationInput, DurableLogger, LambdaService, Operation, TracingLogger,
 };
-use aws_sdk_lambda::Client as LambdaClient;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,8 +36,8 @@ pub struct ExecutionContext {
     /// ARN of the durable execution.
     pub durable_execution_arn: String,
 
-    /// Lambda client for API calls.
-    pub lambda_client: Arc<LambdaClient>,
+    /// Lambda service for API calls.
+    pub lambda_service: Arc<dyn LambdaService>,
 
     /// Termination manager.
     pub termination_manager: Arc<TerminationManager>,
@@ -73,7 +71,7 @@ impl ExecutionContext {
     /// Create a new execution context.
     pub async fn new(
         input: &DurableExecutionInvocationInput,
-        lambda_client: Arc<LambdaClient>,
+        lambda_service: Arc<dyn LambdaService>,
         logger: Option<Arc<dyn DurableLogger>>,
         mode_aware_logging: bool,
     ) -> DurableResult<Self> {
@@ -100,19 +98,17 @@ impl ExecutionContext {
                 });
             }
 
-            let response = lambda_client
-                .get_durable_execution_state()
-                .durable_execution_arn(&input.durable_execution_arn)
-                .checkpoint_token(&input.checkpoint_token)
-                .marker(marker)
-                .max_items(GET_STATE_MAX_ITEMS)
-                .send()
-                .await
-                .map_err(DurableError::aws_sdk)?;
+            let response = lambda_service
+                .get_durable_execution_state(
+                    &input.durable_execution_arn,
+                    &input.checkpoint_token,
+                    &marker,
+                    GET_STATE_MAX_ITEMS,
+                )
+                .await?;
 
             for op in response.operations {
-                let converted = sdk_operation_to_operation(&op)?;
-                step_data.insert(converted.id.clone(), converted);
+                step_data.insert(op.id.clone(), op);
             }
 
             next_marker = response.next_marker.filter(|m| !m.is_empty());
@@ -129,7 +125,7 @@ impl ExecutionContext {
 
         let checkpoint_manager = Arc::new(CheckpointManager::new(
             input.durable_execution_arn.clone(),
-            Arc::clone(&lambda_client),
+            Arc::clone(&lambda_service),
             Arc::clone(&termination_manager),
             input.checkpoint_token.clone(),
             step_data.clone(),
@@ -147,7 +143,7 @@ impl ExecutionContext {
 
         Ok(Self {
             durable_execution_arn: input.durable_execution_arn.clone(),
-            lambda_client,
+            lambda_service,
             termination_manager,
             checkpoint_manager,
             step_data: Arc::new(Mutex::new(step_data)),
@@ -202,89 +198,6 @@ impl ExecutionContext {
     }
 }
 
-fn sdk_operation_to_operation(op: &aws_sdk_lambda::types::Operation) -> DurableResult<Operation> {
-    Ok(Operation {
-        id: op.id.clone(),
-        parent_id: op.parent_id.clone(),
-        name: op.name.clone(),
-        operation_type: match op.r#type {
-            aws_sdk_lambda::types::OperationType::Step => OperationType::Step,
-            aws_sdk_lambda::types::OperationType::Wait => OperationType::Wait,
-            aws_sdk_lambda::types::OperationType::Callback => OperationType::Callback,
-            aws_sdk_lambda::types::OperationType::ChainedInvoke => OperationType::ChainedInvoke,
-            aws_sdk_lambda::types::OperationType::Context => OperationType::Context,
-            aws_sdk_lambda::types::OperationType::Execution => OperationType::Execution,
-            _ => OperationType::Step,
-        },
-        sub_type: op.sub_type.clone(),
-        status: match op.status {
-            aws_sdk_lambda::types::OperationStatus::Ready => OperationStatus::Ready,
-            aws_sdk_lambda::types::OperationStatus::Started => OperationStatus::Started,
-            aws_sdk_lambda::types::OperationStatus::Pending => OperationStatus::Pending,
-            aws_sdk_lambda::types::OperationStatus::Succeeded => OperationStatus::Succeeded,
-            aws_sdk_lambda::types::OperationStatus::Failed => OperationStatus::Failed,
-            _ => OperationStatus::Unknown,
-        },
-        step_details: op.step_details.as_ref().map(|d| crate::types::StepDetails {
-            attempt: Some(d.attempt as u32),
-            next_attempt_timestamp: d
-                .next_attempt_timestamp
-                .as_ref()
-                .map(|ts| crate::types::FlexibleTimestamp::String(ts.to_string())),
-            result: d.result.clone(),
-            error: d.error.as_ref().map(sdk_error_object_to_error_object),
-        }),
-        callback_details: op
-            .callback_details
-            .as_ref()
-            .map(|d| crate::types::CallbackDetails {
-                callback_id: d.callback_id.clone(),
-                result: d.result.clone(),
-                error: d.error.as_ref().map(sdk_error_object_to_error_object),
-            }),
-        wait_details: op.wait_details.as_ref().map(|d| crate::types::WaitDetails {
-            scheduled_end_timestamp: d
-                .scheduled_end_timestamp
-                .as_ref()
-                .map(|ts| crate::types::FlexibleTimestamp::String(ts.to_string())),
-        }),
-        execution_details: op.execution_details.as_ref().map(|d| ExecutionDetails {
-            input_payload: d.input_payload.clone(),
-            output_payload: None,
-        }),
-        context_details: op
-            .context_details
-            .as_ref()
-            .map(|d| crate::types::ContextDetails {
-                replay_children: d.replay_children,
-                result: d.result.clone(),
-                error: d.error.as_ref().map(sdk_error_object_to_error_object),
-            }),
-        chained_invoke_details: op.chained_invoke_details.as_ref().map(|d| {
-            crate::types::ChainedInvokeDetails {
-                result: d.result.clone(),
-                error: d.error.as_ref().map(sdk_error_object_to_error_object),
-            }
-        }),
-    })
-}
-
-fn sdk_error_object_to_error_object(
-    e: &aws_sdk_lambda::types::ErrorObject,
-) -> crate::error::ErrorObject {
-    crate::error::ErrorObject {
-        error_type: e.error_type.clone().unwrap_or_else(|| "Error".to_string()),
-        error_message: e
-            .error_message
-            .clone()
-            .unwrap_or_else(|| "Unknown error".to_string()),
-        details: e
-            .error_data
-            .clone()
-            .or_else(|| e.stack_trace.as_ref().map(|st| st.join("\n"))),
-    }
-}
-
 impl std::fmt::Debug for ExecutionContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecutionContext")
@@ -300,6 +213,9 @@ impl std::fmt::Debug for ExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock::{MockGetStateConfig, MockLambdaService};
+    use crate::types::{ExecutionDetails, OperationStatus, OperationType};
+    use std::sync::Arc;
 
     #[test]
     fn test_operation_id_generation() {
@@ -316,5 +232,64 @@ mod tests {
     #[test]
     fn test_execution_mode() {
         assert_ne!(ExecutionMode::Execution, ExecutionMode::Replay);
+    }
+
+    #[tokio::test]
+    async fn test_execution_context_fetches_additional_state() {
+        let mock = Arc::new(MockLambdaService::new());
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: crate::types::InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some("{}".to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: Some("page-1".to_string()),
+            },
+        };
+
+        mock.expect_get_state(MockGetStateConfig {
+            operations: vec![Operation {
+                id: "step-1".to_string(),
+                parent_id: None,
+                name: None,
+                operation_type: OperationType::Step,
+                sub_type: None,
+                status: OperationStatus::Succeeded,
+                step_details: None,
+                callback_details: None,
+                wait_details: None,
+                execution_details: None,
+                context_details: None,
+                chained_invoke_details: None,
+            }],
+            next_marker: None,
+            error: None,
+        });
+
+        let ctx = ExecutionContext::new(&input, mock.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+
+        assert_eq!(ctx.get_mode().await, ExecutionMode::Replay);
+
+        let calls = mock.get_state_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].marker, "page-1");
+        assert_eq!(calls[0].max_items, GET_STATE_MAX_ITEMS);
     }
 }

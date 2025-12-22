@@ -12,8 +12,8 @@ use crate::error::DurableResult;
 use crate::termination::TerminationReason;
 use crate::types::DurableLogger;
 use crate::types::{
-    DurableExecutionInvocationInput, DurableExecutionInvocationOutput, OperationAction,
-    OperationType, OperationUpdate,
+    DurableExecutionInvocationInput, DurableExecutionInvocationOutput, LambdaService,
+    OperationAction, OperationType, OperationUpdate, RealLambdaService,
 };
 use aws_sdk_lambda::Client as LambdaClient;
 use futures::future::BoxFuture;
@@ -31,8 +31,8 @@ const LAMBDA_RESPONSE_SIZE_LIMIT: usize = 6 * 1024 * 1024 - 50;
 /// Configuration for durable execution.
 #[derive(Clone)]
 pub struct DurableExecutionConfig {
-    /// Custom Lambda client (if not provided, one will be created).
-    pub lambda_client: Option<Arc<LambdaClient>>,
+    /// Custom Lambda service (if not provided, one will be created).
+    pub lambda_service: Option<Arc<dyn LambdaService>>,
 
     /// Optional custom logger for durable operations.
     pub logger: Option<Arc<dyn DurableLogger>>,
@@ -44,7 +44,7 @@ pub struct DurableExecutionConfig {
 impl std::fmt::Debug for DurableExecutionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DurableExecutionConfig")
-            .field("lambda_client", &self.lambda_client.is_some())
+            .field("lambda_service", &self.lambda_service.is_some())
             .field("logger", &self.logger.is_some())
             .field("mode_aware_logging", &self.mode_aware_logging)
             .finish()
@@ -54,7 +54,7 @@ impl std::fmt::Debug for DurableExecutionConfig {
 impl Default for DurableExecutionConfig {
     fn default() -> Self {
         Self {
-            lambda_client: None,
+            lambda_service: None,
             logger: None,
             mode_aware_logging: true,
         }
@@ -69,7 +69,13 @@ impl DurableExecutionConfig {
 
     /// Set a custom Lambda client.
     pub fn with_lambda_client(mut self, client: Arc<LambdaClient>) -> Self {
-        self.lambda_client = Some(client);
+        self.lambda_service = Some(Arc::new(RealLambdaService::new(client)));
+        self
+    }
+
+    /// Set a custom Lambda service.
+    pub fn with_lambda_service(mut self, service: Arc<dyn LambdaService>) -> Self {
+        self.lambda_service = Some(service);
         self
     }
 
@@ -197,19 +203,20 @@ where
         input.durable_execution_arn
     );
 
-    // Create or use provided Lambda client
-    let lambda_client = match config.lambda_client {
-        Some(client) => client,
+    // Create or use provided Lambda service
+    let lambda_service = match config.lambda_service {
+        Some(service) => service,
         None => {
             let sdk_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-            Arc::new(LambdaClient::new(&sdk_config))
+            let client = Arc::new(LambdaClient::new(&sdk_config));
+            Arc::new(RealLambdaService::new(client))
         }
     };
 
     // Create execution context
     let execution_ctx = ExecutionContext::new(
         &input,
-        lambda_client,
+        lambda_service,
         config.logger.clone(),
         config.mode_aware_logging,
     )
@@ -419,7 +426,13 @@ where
 
     /// Set a custom Lambda client.
     pub fn with_lambda_client(mut self, client: Arc<LambdaClient>) -> Self {
-        self.config.lambda_client = Some(client);
+        self.config.lambda_service = Some(Arc::new(RealLambdaService::new(client)));
+        self
+    }
+
+    /// Set a custom Lambda service.
+    pub fn with_lambda_service(mut self, service: Arc<dyn LambdaService>) -> Self {
+        self.config.lambda_service = Some(service);
         self
     }
 
@@ -489,6 +502,6 @@ mod tests {
     #[test]
     fn test_config_builder() {
         let config = DurableExecutionConfig::new();
-        assert!(config.lambda_client.is_none());
+        assert!(config.lambda_service.is_none());
     }
 }

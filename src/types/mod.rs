@@ -117,6 +117,7 @@ mod batch;
 mod config;
 mod duration;
 mod invocation;
+mod lambda_service;
 mod logger;
 mod serdes;
 
@@ -124,5 +125,9 @@ pub use batch::*;
 pub use config::*;
 pub use duration::*;
 pub use invocation::*;
+pub use lambda_service::*;
 pub use logger::*;
 pub use serdes::*;
+
+#[cfg(any(test, feature = "testutils"))]
+pub use lambda_service::mock;

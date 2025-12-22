@@ -1,5 +1,6 @@
 use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
+use crate::mock::MockLambdaService;
 use crate::types::{DurableExecutionInvocationInput, Duration};
 use serde_json::json;
 use std::sync::Arc;
@@ -39,14 +40,9 @@ async fn make_replay_context(
     let input: DurableExecutionInvocationInput =
         serde_json::from_value(input_json).expect("valid invocation input");
 
-    // Build a Lambda client with dummy config. It will never be used in replay-mode tests.
-    let config = aws_sdk_lambda::Config::builder()
-        .region(aws_sdk_lambda::config::Region::new("us-east-1"))
-        .behavior_version(aws_sdk_lambda::config::BehaviorVersion::latest())
-        .build();
-    let client = aws_sdk_lambda::Client::from_conf(config);
+    let lambda_service = Arc::new(MockLambdaService::new());
 
-    let exec_ctx = ExecutionContext::new(&input, Arc::new(client), None, true)
+    let exec_ctx = ExecutionContext::new(&input, lambda_service, None, true)
         .await
         .expect("execution context should initialize");
     DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)))
