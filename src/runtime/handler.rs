@@ -498,10 +498,84 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock::MockLambdaService;
+    use crate::types::{ExecutionDetails, InitialExecutionState, Operation, OperationStatus};
+    use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn test_config_builder() {
         let config = DurableExecutionConfig::new();
         assert!(config.lambda_service.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_missing_execution_operation_returns_error() {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect_err("missing execution op should error");
+
+        assert!(err
+            .to_string()
+            .contains("Missing execution operation in initial execution state"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_input_payload_returns_error() {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: None,
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect_err("missing input payload should error");
+
+        assert!(err
+            .to_string()
+            .contains("Missing input payload in execution operation"));
     }
 }
