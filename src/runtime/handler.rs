@@ -578,4 +578,47 @@ mod tests {
             .to_string()
             .contains("Missing input payload in execution operation"));
     }
+
+    #[tokio::test]
+    async fn test_handler_success_returns_output_payload() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect("handler should succeed");
+
+        assert_eq!(output.status, crate::types::InvocationStatus::Succeeded);
+        assert_eq!(output.result, Some("{\"ok\":true}".to_string()));
+    }
 }
