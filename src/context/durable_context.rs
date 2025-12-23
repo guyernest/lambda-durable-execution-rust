@@ -3948,6 +3948,60 @@ impl DurableContextImpl {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CompletionConfig;
+
+    #[test]
+    fn test_validate_completion_config_ok() {
+        let config = CompletionConfig::new()
+            .with_min_successful(1)
+            .with_tolerated_failures(1)
+            .with_tolerated_failure_percentage(50.0);
+
+        validate_completion_config(&config, 2, "parallel").expect("valid config");
+    }
+
+    #[test]
+    fn test_validate_completion_config_min_successful_exceeds() {
+        let config = CompletionConfig::new().with_min_successful(3);
+        let err = validate_completion_config(&config, 2, "parallel").expect_err("error");
+
+        match err {
+            DurableError::InvalidConfiguration { message } => {
+                assert!(message.contains("min_successful"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_completion_config_failure_count_exceeds() {
+        let config = CompletionConfig::new().with_tolerated_failures(4);
+        let err = validate_completion_config(&config, 2, "parallel").expect_err("error");
+
+        match err {
+            DurableError::InvalidConfiguration { message } => {
+                assert!(message.contains("tolerated_failure_count"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_completion_config_percentage_invalid() {
+        let config = CompletionConfig::new().with_tolerated_failure_percentage(-1.0);
+        assert!(validate_completion_config(&config, 2, "parallel").is_err());
+
+        let config = CompletionConfig::new().with_tolerated_failure_percentage(101.0);
+        assert!(validate_completion_config(&config, 2, "parallel").is_err());
+
+        let config = CompletionConfig::new().with_tolerated_failure_percentage(f64::NAN);
+        assert!(validate_completion_config(&config, 2, "parallel").is_err());
+    }
+}
+
 impl std::fmt::Debug for DurableContextImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DurableContextImpl")

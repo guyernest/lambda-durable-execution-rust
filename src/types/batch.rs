@@ -188,3 +188,96 @@ impl<T> BatchResult<T> {
         self.all.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_batch() -> BatchResult<i32> {
+        BatchResult {
+            all: vec![
+                BatchItem {
+                    index: 0,
+                    status: BatchItemStatus::Succeeded,
+                    result: Some(10),
+                    error: None,
+                },
+                BatchItem {
+                    index: 2,
+                    status: BatchItemStatus::Failed,
+                    result: None,
+                    error: Some(Arc::new(DurableError::Internal("boom".to_string()))),
+                },
+                BatchItem {
+                    index: 1,
+                    status: BatchItemStatus::Started,
+                    result: None,
+                    error: None,
+                },
+            ],
+            completion_reason: BatchCompletionReason::FailureToleranceExceeded,
+        }
+    }
+
+    #[test]
+    fn test_batch_filters_and_counts() {
+        let batch = sample_batch();
+
+        assert_eq!(batch.succeeded().len(), 1);
+        assert_eq!(batch.failed().len(), 1);
+        assert_eq!(batch.started().len(), 1);
+
+        assert_eq!(batch.success_count(), 1);
+        assert_eq!(batch.failure_count(), 1);
+        assert_eq!(batch.started_count(), 1);
+        assert_eq!(batch.total_count(), 3);
+    }
+
+    #[test]
+    fn test_batch_status_and_all_succeeded() {
+        let batch = sample_batch();
+        assert_eq!(batch.status(), BatchItemStatus::Failed);
+        assert!(!batch.all_succeeded());
+
+        let batch = BatchResult {
+            all: vec![BatchItem {
+                index: 0,
+                status: BatchItemStatus::Succeeded,
+                result: Some(1),
+                error: None,
+            }],
+            completion_reason: BatchCompletionReason::AllCompleted,
+        };
+        assert_eq!(batch.status(), BatchItemStatus::Succeeded);
+        assert!(batch.all_succeeded());
+    }
+
+    #[test]
+    fn test_batch_values_sorted_and_errors() {
+        let batch = sample_batch();
+        let errors = batch.errors();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 2);
+
+        let values = sample_batch().values();
+        assert_eq!(values, vec![10]);
+    }
+
+    #[test]
+    fn test_batch_throw_if_error() {
+        let batch = sample_batch();
+        let err = batch.throw_if_error().expect_err("should error");
+
+        match err {
+            DurableError::BatchOperationFailed {
+                successful_count,
+                failed_count,
+                ..
+            } => {
+                assert_eq!(successful_count, 1);
+                assert_eq!(failed_count, 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}

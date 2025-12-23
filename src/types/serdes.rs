@@ -69,3 +69,49 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct Sample {
+        value: u32,
+    }
+
+    fn context() -> SerdesContext {
+        SerdesContext {
+            entity_id: "entity-1".to_string(),
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_json_serdes_roundtrip() {
+        let serdes = JsonSerdes;
+        let value = Sample { value: 42 };
+
+        let encoded = serdes
+            .serialize(Some(&value), context())
+            .await
+            .expect("serialize");
+        let decoded: Option<Sample> = serdes
+            .deserialize(encoded.as_deref(), context())
+            .await
+            .expect("deserialize");
+
+        assert_eq!(decoded, Some(value));
+    }
+
+    #[tokio::test]
+    async fn test_json_serdes_none_passthrough() {
+        let serdes = JsonSerdes;
+
+        let encoded = serdes.serialize(None::<&Sample>, context()).await.unwrap();
+        assert!(encoded.is_none());
+
+        let decoded: Option<Sample> = serdes.deserialize(None, context()).await.unwrap();
+        assert!(decoded.is_none());
+    }
+}

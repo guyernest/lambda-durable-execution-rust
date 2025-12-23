@@ -112,3 +112,63 @@ impl DurableLogger for TracingLogger {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct TestLogger {
+        levels: Mutex<Vec<DurableLogLevel>>,
+    }
+
+    impl TestLogger {
+        fn new() -> Self {
+            Self {
+                levels: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn levels(&self) -> Vec<DurableLogLevel> {
+            self.levels.lock().expect("levels mutex").clone()
+        }
+    }
+
+    impl DurableLogger for TestLogger {
+        fn log(
+            &self,
+            level: DurableLogLevel,
+            _data: &DurableLogData,
+            _message: &str,
+            _fields: Option<&[(&'static str, String)]>,
+        ) {
+            self.levels.lock().expect("levels mutex").push(level);
+        }
+    }
+
+    #[test]
+    fn test_logger_helpers_forward_levels() {
+        let logger = TestLogger::new();
+        let data = DurableLogData {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            operation_id: Some("op-1".to_string()),
+            step_name: Some("step".to_string()),
+            attempt: Some(1),
+        };
+
+        logger.debug(&data, "debug");
+        logger.info(&data, "info");
+        logger.warn(&data, "warn");
+        logger.error(&data, "error");
+
+        assert_eq!(
+            logger.levels(),
+            vec![
+                DurableLogLevel::Debug,
+                DurableLogLevel::Info,
+                DurableLogLevel::Warn,
+                DurableLogLevel::Error
+            ]
+        );
+    }
+}
