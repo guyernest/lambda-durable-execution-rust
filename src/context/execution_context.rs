@@ -418,4 +418,40 @@ mod tests {
         assert_eq!(op.status, OperationStatus::Succeeded);
         assert_eq!(op.name.as_deref(), Some("step"));
     }
+
+    #[tokio::test]
+    async fn test_next_operation_id_uses_prefix() {
+        let mock = Arc::new(MockLambdaService::new());
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: crate::types::InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some("{}".to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let ctx = ExecutionContext::new(&input, mock, None, true)
+            .await
+            .expect("execution context should initialize");
+
+        assert_eq!(ctx.next_operation_id(Some("step")), "step_0");
+        assert_eq!(ctx.next_operation_id(None), "op_1");
+    }
 }
