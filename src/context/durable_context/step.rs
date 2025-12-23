@@ -1,5 +1,6 @@
 use super::*;
 
+mod execute;
 mod replay;
 
 #[derive(Debug)]
@@ -138,187 +139,18 @@ impl DurableContextImpl {
             return Ok(result);
         }
 
-        // We're executing a new (or interrupted-at-least-once) step now.
-        self.execution_ctx.set_mode(ExecutionMode::Execution).await;
-
-        let already_started = matches!(
-            operation.as_ref().map(|op| op.status),
-            Some(OperationStatus::Started | OperationStatus::Ready)
-        );
-
-        if !already_started {
-            // Phase 1: checkpoint START depending on semantics.
-            let mut builder = OperationUpdate::builder()
-                .id(&hashed_id)
-                .operation_type(OperationType::Step)
-                .sub_type("Step")
-                .action(OperationAction::Start);
-            if let Some(ref pid) = parent_id {
-                builder = builder.parent_id(pid);
-            }
-            if let Some(n) = name {
-                builder = builder.name(n);
-            }
-
-            let start_update = builder.build().map_err(|e| {
-                DurableError::Internal(format!("Failed to build step START update: {e}"))
-            })?;
-            match semantics {
-                StepSemantics::AtMostOncePerRetry => {
-                    self.execution_ctx
-                        .checkpoint_manager
-                        .checkpoint(step_id.clone(), start_update)
-                        .await?;
-                }
-                StepSemantics::AtLeastOncePerRetry => {
-                    // Enqueue without waiting, mirroring JS/Python semantics while preserving ordering
-                    // with subsequent checkpoints for the same operation.
-                    self.execution_ctx
-                        .checkpoint_manager
-                        .checkpoint_queued(step_id.clone(), start_update)
-                        .await?;
-                }
-            }
-        }
-
-        // Create step context
-        let attempt_idx = operation
-            .as_ref()
-            .and_then(|op| op.step_details.as_ref().and_then(|d| d.attempt))
-            .unwrap_or(0);
-        let attempt = attempt_idx + 1;
-        let mode_now = self.execution_ctx.get_mode().await;
-        let step_ctx = StepContext::new_with_logger(
-            name.map(String::from),
-            hashed_id.clone(),
-            self.execution_ctx.durable_execution_arn.clone(),
-            self.execution_ctx.logger.clone(),
-            mode_now,
-            self.execution_ctx.mode_aware_logging,
-            Some(attempt),
-        );
-
-        // Execute step function
-        match step_fn(step_ctx).await {
-            Ok(result) => {
-                // Checkpoint SUCCESS
-                let payload =
-                    safe_serialize(serdes, Some(&result), &hashed_id, name, &self.execution_ctx)
-                        .await;
-
-                let mut builder = OperationUpdate::builder()
-                    .id(&hashed_id)
-                    .operation_type(OperationType::Step)
-                    .sub_type("Step")
-                    .action(OperationAction::Succeed);
-
-                if let Some(ref pid) = parent_id {
-                    builder = builder.parent_id(pid);
-                }
-                if let Some(n) = name {
-                    builder = builder.name(n);
-                }
-
-                if let Some(p) = payload {
-                    builder = builder.payload(p);
-                }
-
-                self.execution_ctx
-                    .checkpoint_manager
-                    .checkpoint(
-                        step_id.clone(),
-                        builder.build().map_err(|e| {
-                            DurableError::Internal(format!(
-                                "Failed to build step SUCCEED update: {e}"
-                            ))
-                        })?,
-                    )
-                    .await?;
-
-                Ok(result)
-            }
-            Err(error) => {
-                let attempts_made = attempt;
-                let decision = retry_strategy.should_retry(error.as_ref(), attempts_made);
-
-                if decision.should_retry {
-                    let delay = decision.delay.unwrap_or(Duration::seconds(1));
-                    let error_obj = ErrorObject::from_error(error.as_ref());
-
-                    // Checkpoint retry with delay - triggers termination
-                    let mut builder = OperationUpdate::builder()
-                        .id(&hashed_id)
-                        .operation_type(OperationType::Step)
-                        .sub_type("Step")
-                        .action(OperationAction::Retry)
-                        .error(error_obj)
-                        .step_options(crate::types::StepUpdateOptions {
-                            next_attempt_delay_seconds: Some(delay.to_seconds_i32_saturating()),
-                        });
-
-                    if let Some(ref pid) = parent_id {
-                        builder = builder.parent_id(pid);
-                    }
-                    if let Some(n) = name {
-                        builder = builder.name(n);
-                    }
-
-                    self.execution_ctx
-                        .checkpoint_manager
-                        .checkpoint(
-                            step_id.clone(),
-                            builder.build().map_err(|e| {
-                                DurableError::Internal(format!(
-                                    "Failed to build step RETRY update: {e}"
-                                ))
-                            })?,
-                        )
-                        .await?;
-
-                    // Trigger termination for retry
-                    self.execution_ctx
-                        .termination_manager
-                        .terminate_for_retry()
-                        .await;
-
-                    // Never reached
-                    std::future::pending::<()>().await;
-                    unreachable!()
-                }
-
-                // No more retries - fail
-                let error_obj = ErrorObject::from_error(error.as_ref());
-
-                let mut builder = OperationUpdate::builder()
-                    .id(&hashed_id)
-                    .operation_type(OperationType::Step)
-                    .sub_type("Step")
-                    .action(OperationAction::Fail)
-                    .error(error_obj);
-
-                if let Some(ref pid) = parent_id {
-                    builder = builder.parent_id(pid);
-                }
-                if let Some(n) = name {
-                    builder = builder.name(n);
-                }
-
-                self.execution_ctx
-                    .checkpoint_manager
-                    .checkpoint(
-                        step_id.clone(),
-                        builder.build().map_err(|e| {
-                            DurableError::Internal(format!("Failed to build step FAIL update: {e}"))
-                        })?,
-                    )
-                    .await?;
-
-                Err(DurableError::step_failed_boxed(
-                    step_id,
-                    attempts_made,
-                    error,
-                ))
-            }
-        }
+        execute::run_step_execution(
+            self,
+            name,
+            step_fn,
+            step_id,
+            hashed_id,
+            operation,
+            semantics,
+            retry_strategy,
+            serdes,
+            parent_id,
+        )
+        .await
     }
 }
