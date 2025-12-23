@@ -923,4 +923,30 @@ mod tests {
         assert!(info.awaited);
         assert_eq!(info.lifecycle, OperationLifecycle::IdleAwaited);
     }
+
+    #[tokio::test]
+    async fn test_update_operation_lifecycle_wait_idle() {
+        let mock = Arc::new(MockLambdaService::new());
+        let termination_manager = Arc::new(TerminationManager::new());
+        let manager = CheckpointManager::new(
+            "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            mock,
+            termination_manager,
+            "token-0".to_string(),
+            HashMap::new(),
+        );
+
+        let update = OperationUpdate::builder()
+            .id("wait-1")
+            .operation_type(OperationType::Wait)
+            .action(OperationAction::Start)
+            .build()
+            .unwrap();
+
+        manager.update_operation_lifecycle(&update).await;
+
+        let operations = manager.operations.lock().await;
+        let info = operations.get("wait-1").expect("operation should exist");
+        assert_eq!(info.lifecycle, OperationLifecycle::IdleNotAwaited);
+    }
 }
