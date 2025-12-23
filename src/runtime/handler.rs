@@ -621,4 +621,61 @@ mod tests {
         assert_eq!(output.status, crate::types::InvocationStatus::Succeeded);
         assert_eq!(output.result, Some("{\"ok\":true}".to_string()));
     }
+
+    #[tokio::test]
+    async fn test_large_output_payload_is_checkpointed() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let mock = Arc::new(MockLambdaService::new());
+        mock.expect_checkpoint(crate::mock::MockCheckpointConfig::default());
+
+        let config = DurableExecutionConfig::new().with_lambda_service(mock.clone());
+
+        let big = "a".repeat(LAMBDA_RESPONSE_SIZE_LIMIT + 128);
+
+        let output = execute_durable_handler(
+            input,
+            move |_event: serde_json::Value, _ctx| {
+                let big = big.clone();
+                async move { Ok(json!({ "data": big })) }
+            },
+            config,
+        )
+        .await
+        .expect("handler should succeed");
+
+        assert_eq!(output.status, crate::types::InvocationStatus::Succeeded);
+        assert_eq!(output.result, Some(String::new()));
+
+        let calls = mock.checkpoint_calls();
+        assert_eq!(calls.len(), 1);
+        let update = &calls[0].updates[0];
+        assert_eq!(update.operation_type, OperationType::Execution);
+        assert_eq!(update.action, OperationAction::Succeed);
+        assert!(update.payload.as_ref().unwrap().len() > LAMBDA_RESPONSE_SIZE_LIMIT);
+    }
 }
