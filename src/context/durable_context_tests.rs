@@ -2,7 +2,12 @@ use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
 use crate::error::DurableError;
 use crate::mock::MockLambdaService;
-use crate::types::{DurableExecutionInvocationInput, Duration};
+use crate::types::{
+    BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult,
+    DurableExecutionInvocationInput, Duration, MapConfig, ParallelConfig, Serdes, SerdesContext,
+    WaitConditionConfig, WaitConditionDecision,
+};
+use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -47,6 +52,42 @@ async fn make_replay_context(
         .await
         .expect("execution context should initialize");
     DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)))
+}
+
+struct StaticBatchSerdes<T> {
+    items: Vec<(usize, BatchItemStatus, Option<T>)>,
+    completion_reason: BatchCompletionReason,
+}
+
+#[async_trait]
+impl<T: Clone + Send + Sync> Serdes<BatchResult<T>> for StaticBatchSerdes<T> {
+    async fn serialize(
+        &self,
+        _value: Option<&BatchResult<T>>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, crate::error::BoxError> {
+        Ok(Some("payload".to_string()))
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<BatchResult<T>>, crate::error::BoxError> {
+        let mut all = Vec::new();
+        for (index, status, result) in &self.items {
+            all.push(BatchItem {
+                index: *index,
+                status: *status,
+                result: result.clone(),
+                error: None,
+            });
+        }
+        Ok(Some(BatchResult {
+            all,
+            completion_reason: self.completion_reason,
+        }))
+    }
 }
 
 #[tokio::test]
@@ -110,6 +151,73 @@ async fn test_step_replay_failed_returns_error() {
         } => {
             assert_eq!(message, "boom");
             assert_eq!(attempts, 2);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_step_replay_missing_output_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let err = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            None::<crate::types::StepConfig<u32>>,
+        )
+        .await
+        .expect_err("missing payload should error");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing step output"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_step_replay_failed_defaults_message() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "FAILED",
+        "StepDetails": { "Attempt": 2 },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let err = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            None::<crate::types::StepConfig<u32>>,
+        )
+        .await
+        .expect_err("step should fail in replay");
+
+    match err {
+        DurableError::StepFailed {
+            message, attempts, ..
+        } => {
+            assert_eq!(message, "Replayed failure");
+            assert_eq!(attempts, 3);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -318,6 +426,40 @@ async fn test_invoke_replay_missing_result_returns_error() {
 }
 
 #[tokio::test]
+async fn test_wait_for_callback_replay_missing_result_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            |_id, _step_ctx| async move {
+                panic!("submitter should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(())
+            },
+            None,
+        )
+        .await
+        .expect_err("callback should fail without result");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing callback result"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_wait_for_callback_replay_success_returns_result() {
     let arn = "arn:test:durable";
     let step_id = "callback_0".to_string();
@@ -408,6 +550,27 @@ async fn test_create_callback_replay_uses_existing_id_and_payload() {
     assert_eq!(handle.callback_id(), "cb-123");
     let raw = handle.wait_raw().await.unwrap();
     assert_eq!(raw, payload);
+}
+
+#[tokio::test]
+async fn test_create_callback_replay_defaults_callback_id() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "STARTED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    assert_eq!(handle.callback_id(), format!("{arn}:{hashed_id}"));
 }
 
 #[tokio::test]
@@ -504,6 +667,360 @@ async fn test_run_in_child_context_replay_failure_returns_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_replay_success_returns_result() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"ok": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Result": payload, "Attempt": 1 },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let config = WaitConditionConfig::new(
+        json!({"initial": true}),
+        Arc::new(|_state: &serde_json::Value, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let value: serde_json::Value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                panic!("check_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(json!({}))
+            },
+            config,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, json!({"ok": true}));
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_replay_missing_result_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let err = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                panic!("check_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(0u32)
+            },
+            config,
+        )
+        .await
+        .expect_err("missing payload should error");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing wait-for-condition result"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "FAILED",
+        "StepDetails": {
+            "Attempt": 2,
+            "Error": { "ErrorType": "Error", "ErrorMessage": "nope" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let err = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                panic!("check_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(0u32)
+            },
+            config,
+        )
+        .await
+        .expect_err("wait_for_condition should fail in replay");
+
+    match err {
+        DurableError::StepFailed {
+            message, attempts, ..
+        } => {
+            assert!(message.contains("nope"));
+            assert_eq!(attempts, 2);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_map_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "FAILED",
+        "ContextDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "map boom" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .expect_err("map should fail in replay");
+
+    match err {
+        DurableError::BatchOperationFailed { message, .. } => {
+            assert!(message.contains("map boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_map_replay_batch_serdes_validation_failed() {
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "ignored" },
+    });
+
+    let batch_serdes = StaticBatchSerdes {
+        items: vec![(2, BatchItemStatus::Succeeded, Some("x".to_string()))],
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+
+    let cfg = MapConfig::new().with_serdes(Arc::new(batch_serdes));
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok::<String, DurableError>("".to_string())
+            },
+            Some(cfg),
+        )
+        .await
+        .expect_err("map should fail replay validation");
+
+    match err {
+        DurableError::ReplayValidationFailed { expected, .. } => {
+            assert!(expected.contains("map totalCount"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_map_replay_batch_serdes_returns_batch() {
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "ignored" },
+    });
+
+    let batch_serdes = StaticBatchSerdes {
+        items: vec![
+            (0, BatchItemStatus::Succeeded, Some("a".to_string())),
+            (1, BatchItemStatus::Succeeded, Some("b".to_string())),
+        ],
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+
+    let cfg = MapConfig::new().with_serdes(Arc::new(batch_serdes));
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let batch: BatchResult<String> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok::<String, DurableError>("".to_string())
+            },
+            Some(cfg),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 2);
+    assert_eq!(batch.values(), vec!["a".to_string(), "b".to_string()]);
+}
+
+#[tokio::test]
+async fn test_parallel_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "FAILED",
+        "ContextDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "parallel boom" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in replay");
+        #[allow(unreachable_code)]
+        Ok::<String, DurableError>("".to_string())
+    };
+
+    let err = ctx
+        .parallel(Some("parallel"), vec![branch, branch], None)
+        .await
+        .expect_err("parallel should fail in replay");
+
+    match err {
+        DurableError::BatchOperationFailed { message, .. } => {
+            assert!(message.contains("parallel boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_parallel_replay_batch_serdes_validation_failed() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "ignored" },
+    });
+
+    let batch_serdes = StaticBatchSerdes {
+        items: vec![(2, BatchItemStatus::Succeeded, Some("x".to_string()))],
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+    let cfg = ParallelConfig::new().with_serdes(Arc::new(batch_serdes));
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in replay");
+        #[allow(unreachable_code)]
+        Ok::<String, DurableError>("".to_string())
+    };
+
+    let err = ctx
+        .parallel(Some("parallel"), vec![branch, branch], Some(cfg))
+        .await
+        .expect_err("parallel should fail replay validation");
+
+    match err {
+        DurableError::ReplayValidationFailed { expected, .. } => {
+            assert!(expected.contains("parallel totalCount"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_parallel_replay_batch_serdes_returns_batch() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "ignored" },
+    });
+
+    let batch_serdes = StaticBatchSerdes {
+        items: vec![
+            (0, BatchItemStatus::Succeeded, Some("a".to_string())),
+            (1, BatchItemStatus::Succeeded, Some("b".to_string())),
+        ],
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+    let cfg = ParallelConfig::new().with_serdes(Arc::new(batch_serdes));
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in replay");
+        #[allow(unreachable_code)]
+        Ok::<String, DurableError>("".to_string())
+    };
+
+    let batch: BatchResult<String> = ctx
+        .parallel(Some("parallel"), vec![branch, branch], Some(cfg))
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 2);
+    assert_eq!(batch.values(), vec!["a".to_string(), "b".to_string()]);
 }
 
 #[tokio::test]
