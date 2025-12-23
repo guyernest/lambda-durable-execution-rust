@@ -1,5 +1,6 @@
 use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
+use crate::error::DurableError;
 use crate::mock::MockLambdaService;
 use crate::types::{DurableExecutionInvocationInput, Duration};
 use serde_json::json;
@@ -149,6 +150,16 @@ async fn test_wait_replay_failed_returns_error() {
 }
 
 #[tokio::test]
+async fn test_wait_zero_duration_returns_immediately() {
+    let arn = "arn:test:durable";
+    let ctx = make_replay_context(arn, vec![]).await;
+
+    ctx.wait(Some("wait"), Duration::seconds(0))
+        .await
+        .expect("zero duration should return");
+}
+
+#[tokio::test]
 async fn test_map_replay_skips_incomplete_children() {
     let arn = "arn:test:durable";
     let name = Some("map");
@@ -217,6 +228,282 @@ async fn test_map_replay_skips_incomplete_children() {
     assert_eq!(batch.success_count(), 2);
     assert_eq!(batch.failure_count(), 0);
     assert_eq!(batch.values(), vec![1u32, 2u32]);
+}
+
+#[tokio::test]
+async fn test_invoke_replay_success_returns_result() {
+    let arn = "arn:test:durable";
+    let step_id = "invoke_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"ok": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CHAINED_INVOKE",
+        "Status": "SUCCEEDED",
+        "ChainedInvokeDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let value: serde_json::Value = ctx
+        .invoke::<serde_json::Value, serde_json::Value>(
+            Some("invoke"),
+            "fn",
+            Option::<serde_json::Value>::None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, json!({"ok": true}));
+}
+
+#[tokio::test]
+async fn test_invoke_replay_failure_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "invoke_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CHAINED_INVOKE",
+        "Status": "FAILED",
+        "ChainedInvokeDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "boom" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .invoke::<serde_json::Value, serde_json::Value>(
+            Some("invoke"),
+            "fn",
+            Option::<serde_json::Value>::None,
+        )
+        .await
+        .expect_err("invoke should fail in replay");
+
+    match err {
+        DurableError::InvocationFailed { message, .. } => {
+            assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_invoke_replay_missing_result_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "invoke_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CHAINED_INVOKE",
+        "Status": "SUCCEEDED",
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .invoke::<serde_json::Value, serde_json::Value>(
+            Some("invoke"),
+            "fn",
+            Option::<serde_json::Value>::None,
+        )
+        .await
+        .expect_err("invoke should fail without result");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing invoke result"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_wait_for_callback_replay_success_returns_result() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"approved": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let value: serde_json::Value = ctx
+        .wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            |_id, _step_ctx| async move {
+                panic!("submitter should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(())
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, json!({"approved": true}));
+}
+
+#[tokio::test]
+async fn test_wait_for_callback_replay_failure_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "FAILED",
+        "CallbackDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "nope" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            |_id, _step_ctx| async move {
+                panic!("submitter should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(())
+            },
+            None,
+        )
+        .await
+        .expect_err("callback should fail in replay");
+
+    match err {
+        DurableError::CallbackFailed { message, .. } => {
+            assert!(message.contains("nope"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_create_callback_replay_uses_existing_id_and_payload() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"ok": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": {
+            "CallbackId": "cb-123",
+            "Result": payload,
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    assert_eq!(handle.callback_id(), "cb-123");
+    let raw = handle.wait_raw().await.unwrap();
+    assert_eq!(raw, payload);
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_replay_uses_context_result() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&42u32).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let value: u32 = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move {
+                panic!("child context should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(0u32)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 42u32);
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_replay_uses_execution_output_fallback() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"ok": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "SUCCEEDED",
+        "ExecutionDetails": { "OutputPayload": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let value: serde_json::Value = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move {
+                panic!("child context should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(json!({}))
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, json!({"ok": true}));
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_replay_failure_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "FAILED",
+        "ContextDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "boom" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move {
+                panic!("child context should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(json!({}))
+            },
+            None,
+        )
+        .await
+        .expect_err("child context should fail in replay");
+
+    match err {
+        DurableError::ChildContextFailed { message, .. } => {
+            assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[tokio::test]
