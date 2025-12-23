@@ -625,6 +625,20 @@ mod tests {
     }
 
     #[test]
+    fn test_operation_update_builder_rejects_negative_next_attempt_delay() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Retry)
+            .step_options(StepUpdateOptions {
+                next_attempt_delay_seconds: Some(-2),
+            })
+            .build();
+
+        assert!(update.is_err());
+    }
+
+    #[test]
     fn test_operation_update_builder_rejects_negative_timeout() {
         let update = OperationUpdate::builder()
             .id("op-1")
