@@ -623,6 +623,7 @@ impl DurableExecutionConfig {
 mod tests {
     use super::*;
     use crate::mock::MockLambdaService;
+    use crate::types::JsonSerdes;
     use std::sync::Arc;
 
     #[test]
@@ -657,6 +658,18 @@ mod tests {
         assert_eq!(config.max_concurrency, Some(5));
         assert_eq!(config.completion_config.min_successful, Some(3));
         assert_eq!(config.completion_config.tolerated_failure_count, Some(2));
+    }
+
+    #[test]
+    fn test_wait_condition_config_builder() {
+        let wait_strategy = Arc::new(|_state: &i32, _attempt: u32| WaitConditionDecision::Stop);
+        let config = WaitConditionConfig::new(0, wait_strategy)
+            .with_max_attempts(3)
+            .with_serdes(Arc::new(JsonSerdes));
+
+        assert_eq!(config.initial_state, 0);
+        assert_eq!(config.max_attempts, Some(3));
+        assert!(config.serdes.is_some());
     }
 
     #[test]
