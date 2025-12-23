@@ -1,5 +1,7 @@
 pub(super) use crate::checkpoint::CheckpointManager;
-pub(super) use crate::context::{BoxFuture, DurableContextHandle, DurableContextImpl, ExecutionContext};
+pub(super) use crate::context::{
+    BoxFuture, DurableContextHandle, DurableContextImpl, ExecutionContext,
+};
 pub(super) use crate::error::DurableError;
 pub(super) use crate::mock::{MockCheckpointConfig, MockLambdaService};
 pub(super) use crate::retry::NoRetry;

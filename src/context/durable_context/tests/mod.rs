@@ -1,8 +1,15 @@
 use super::*;
 use crate::types::CompletionConfig;
 
+mod callback;
+mod child;
 mod helpers;
-mod operations;
+mod invoke;
+mod map;
+mod parallel;
+mod step;
+mod wait;
+mod wait_condition;
 
 #[test]
 fn test_validate_completion_config_ok() {
