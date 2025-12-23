@@ -256,6 +256,68 @@ mod tests {
     }
 
     #[test]
+    fn test_aggressive_preset_attempts() {
+        let strategy = aggressive();
+        let error = io::Error::other("error");
+
+        assert!(strategy.should_retry(&error, 1).should_retry);
+        assert!(!strategy.should_retry(&error, 6).should_retry);
+    }
+
+    #[test]
+    fn test_conservative_preset_attempts() {
+        let strategy = conservative();
+        let error = io::Error::other("error");
+
+        assert!(strategy.should_retry(&error, 9).should_retry);
+        assert!(!strategy.should_retry(&error, 10).should_retry);
+    }
+
+    #[test]
+    fn test_database_preset_filters_errors() {
+        let strategy = database();
+
+        let deadlock = io::Error::other("deadlock detected");
+        let auth = io::Error::new(io::ErrorKind::PermissionDenied, "unauthorized");
+
+        assert!(strategy.should_retry(&deadlock, 1).should_retry);
+        assert!(!strategy.should_retry(&auth, 1).should_retry);
+    }
+
+    #[test]
+    fn test_rate_limited_preset_filters_errors() {
+        let strategy = rate_limited();
+
+        let throttled = io::Error::other("HTTP 429 too many requests");
+        let other = io::Error::other("conflict");
+
+        assert!(strategy.should_retry(&throttled, 1).should_retry);
+        assert!(!strategy.should_retry(&other, 1).should_retry);
+    }
+
+    #[test]
+    fn test_single_preset_limits_attempts() {
+        let strategy = single();
+        let error = io::Error::other("error");
+
+        assert!(strategy.should_retry(&error, 1).should_retry);
+        assert!(!strategy.should_retry(&error, 2).should_retry);
+    }
+
+    #[test]
+    fn test_alias_presets_match_behavior() {
+        let error = io::Error::other("error");
+
+        assert!(
+            !default_exponential_backoff()
+                .should_retry(&error, 6)
+                .should_retry
+        );
+        assert!(!aggressive_retry().should_retry(&error, 6).should_retry);
+        assert!(!patient_retry().should_retry(&error, 10).should_retry);
+    }
+
+    #[test]
     fn test_none_preset() {
         let strategy = none();
         let error = io::Error::other("error");

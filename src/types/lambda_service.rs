@@ -65,9 +65,19 @@ pub trait LambdaService: Send + Sync + Debug {
 #[cfg(test)]
 mod tests {
     use super::mock::{MockCheckpointConfig, MockGetStateConfig, MockLambdaService};
-    use super::LambdaService;
-    use crate::error::DurableError;
-    use crate::types::{OperationAction, OperationType, OperationUpdate};
+    use super::{
+        is_recoverable_message, sdk_error_object_to_error_object,
+        sdk_operation_status_to_operation_status, sdk_operation_to_operation,
+        sdk_operation_type_to_operation_type, to_sdk_operation_update, LambdaService,
+    };
+    use crate::error::{DurableError, ErrorObject};
+    use crate::types::{
+        CallbackUpdateOptions, ChainedInvokeUpdateOptions, ContextUpdateOptions, FlexibleTimestamp,
+        OperationAction, OperationStatus, OperationType, OperationUpdate, StepUpdateOptions,
+        WaitUpdateOptions,
+    };
+    use aws_sdk_lambda::types as sdk_types;
+    use aws_smithy_types::DateTime;
 
     #[tokio::test]
     async fn test_mock_service_requires_responses() {
@@ -165,6 +175,204 @@ mod tests {
         assert_eq!(calls[0].checkpoint_token, "token-1");
         assert_eq!(calls[0].marker, "marker-1");
         assert_eq!(calls[0].max_items, 50);
+    }
+
+    #[test]
+    fn test_to_sdk_operation_update_maps_fields() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .parent_id("parent-1")
+            .name("step-1")
+            .sub_type("sub")
+            .operation_type(OperationType::Step)
+            .action(OperationAction::Start)
+            .payload("{\"ok\":true}")
+            .error(ErrorObject {
+                error_type: "Type".to_string(),
+                error_message: "Message".to_string(),
+                details: Some("detail".to_string()),
+            })
+            .context_options(ContextUpdateOptions {
+                replay_children: Some(true),
+            })
+            .step_options(StepUpdateOptions {
+                next_attempt_delay_seconds: Some(7),
+            })
+            .wait_options(WaitUpdateOptions {
+                wait_seconds: Some(12),
+            })
+            .callback_options(CallbackUpdateOptions {
+                timeout_seconds: Some(30),
+                heartbeat_timeout_seconds: Some(5),
+            })
+            .chained_invoke_options(ChainedInvokeUpdateOptions {
+                function_name: "fn-arn".to_string(),
+                tenant_id: Some("tenant-1".to_string()),
+            })
+            .build()
+            .unwrap();
+
+        let sdk_update = to_sdk_operation_update(update).expect("sdk update");
+        assert_eq!(sdk_update.id(), "op-1");
+        assert_eq!(sdk_update.parent_id(), Some("parent-1"));
+        assert_eq!(sdk_update.name(), Some("step-1"));
+        assert_eq!(sdk_update.sub_type(), Some("sub"));
+        assert_eq!(sdk_update.payload(), Some("{\"ok\":true}"));
+        assert_eq!(sdk_update.r#type(), &sdk_types::OperationType::Step);
+        assert_eq!(sdk_update.action(), &sdk_types::OperationAction::Start);
+
+        let error = sdk_update.error().expect("error");
+        assert_eq!(error.error_type(), Some("Type"));
+        assert_eq!(error.error_message(), Some("Message"));
+        assert_eq!(error.error_data(), None);
+
+        let ctx = sdk_update.context_options().expect("context options");
+        assert_eq!(ctx.replay_children(), Some(true));
+
+        let step = sdk_update.step_options().expect("step options");
+        assert_eq!(step.next_attempt_delay_seconds(), Some(7));
+
+        let wait = sdk_update.wait_options().expect("wait options");
+        assert_eq!(wait.wait_seconds(), Some(12));
+
+        let callback = sdk_update.callback_options().expect("callback options");
+        assert_eq!(callback.timeout_seconds(), 30);
+        assert_eq!(callback.heartbeat_timeout_seconds(), 5);
+
+        let chained = sdk_update.chained_invoke_options().expect("chained invoke");
+        assert_eq!(chained.function_name(), "fn-arn");
+        assert_eq!(chained.tenant_id(), Some("tenant-1"));
+    }
+
+    #[test]
+    fn test_sdk_operation_to_operation_maps_details() {
+        let error = sdk_types::ErrorObject::builder()
+            .error_type("Type")
+            .error_message("Message")
+            .error_data("data")
+            .stack_trace("trace-1")
+            .build();
+
+        let step_details = sdk_types::StepDetails::builder()
+            .attempt(2)
+            .next_attempt_timestamp(DateTime::from_secs(123))
+            .result("{\"ok\":true}")
+            .error(error.clone())
+            .build();
+
+        let wait_details = sdk_types::WaitDetails::builder()
+            .scheduled_end_timestamp(DateTime::from_secs(456))
+            .build();
+
+        let callback_details = sdk_types::CallbackDetails::builder()
+            .callback_id("cb-1")
+            .result("{\"cb\":true}")
+            .error(error.clone())
+            .build();
+
+        let execution_details = sdk_types::ExecutionDetails::builder()
+            .input_payload("{\"input\":1}")
+            .build();
+
+        let context_details = sdk_types::ContextDetails::builder()
+            .replay_children(true)
+            .result("{\"ctx\":true}")
+            .error(error.clone())
+            .build();
+
+        let chained_invoke_details = sdk_types::ChainedInvokeDetails::builder()
+            .result("{\"invoke\":true}")
+            .error(error.clone())
+            .build();
+
+        let op = sdk_types::Operation::builder()
+            .id("op-1")
+            .r#type(sdk_types::OperationType::Step)
+            .status(sdk_types::OperationStatus::Succeeded)
+            .start_timestamp(DateTime::from_secs(0))
+            .step_details(step_details)
+            .wait_details(wait_details)
+            .callback_details(callback_details)
+            .execution_details(execution_details)
+            .context_details(context_details)
+            .chained_invoke_details(chained_invoke_details)
+            .build()
+            .unwrap();
+
+        let converted = sdk_operation_to_operation(&op).expect("convert");
+        assert_eq!(converted.id, "op-1");
+        assert_eq!(converted.operation_type, OperationType::Step);
+        assert_eq!(converted.status, OperationStatus::Succeeded);
+
+        let step_details = converted.step_details.expect("step details");
+        assert_eq!(step_details.attempt, Some(2));
+        assert_eq!(step_details.result.as_deref(), Some("{\"ok\":true}"));
+        let step_error = step_details.error.expect("step error");
+        assert_eq!(step_error.error_type, "Type");
+        assert_eq!(step_error.error_message, "Message");
+        assert_eq!(step_error.details.as_deref(), Some("data"));
+
+        let callback_details = converted.callback_details.expect("callback details");
+        assert_eq!(callback_details.callback_id.as_deref(), Some("cb-1"));
+        assert_eq!(callback_details.result.as_deref(), Some("{\"cb\":true}"));
+
+        let wait_details = converted.wait_details.expect("wait details");
+        match wait_details.scheduled_end_timestamp {
+            Some(FlexibleTimestamp::String(ts)) => assert!(!ts.is_empty()),
+            other => panic!("unexpected wait timestamp: {other:?}"),
+        }
+
+        let execution_details = converted.execution_details.expect("execution details");
+        assert_eq!(
+            execution_details.input_payload.as_deref(),
+            Some("{\"input\":1}")
+        );
+        assert!(execution_details.output_payload.is_none());
+
+        let context_details = converted.context_details.expect("context details");
+        assert_eq!(context_details.replay_children, Some(true));
+        assert_eq!(context_details.result.as_deref(), Some("{\"ctx\":true}"));
+
+        let chained_details = converted
+            .chained_invoke_details
+            .expect("chained invoke details");
+        assert_eq!(chained_details.result.as_deref(), Some("{\"invoke\":true}"));
+    }
+
+    #[test]
+    fn test_sdk_error_object_to_error_object_defaults_and_details() {
+        let error = sdk_types::ErrorObject::builder()
+            .stack_trace("trace-1")
+            .stack_trace("trace-2")
+            .build();
+
+        let converted = sdk_error_object_to_error_object(&error);
+        assert_eq!(converted.error_type, "Error");
+        assert_eq!(converted.error_message, "Unknown error");
+        assert_eq!(converted.details.as_deref(), Some("trace-1\ntrace-2"));
+    }
+
+    #[test]
+    fn test_sdk_operation_type_and_status_unknown_defaults() {
+        let op_type = sdk_types::OperationType::from("NEW_TYPE");
+        let status = sdk_types::OperationStatus::from("NEW_STATUS");
+
+        assert_eq!(
+            sdk_operation_type_to_operation_type(op_type),
+            OperationType::Step
+        );
+        assert_eq!(
+            sdk_operation_status_to_operation_status(status),
+            OperationStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn test_is_recoverable_message_matches_keywords() {
+        assert!(is_recoverable_message("Rate exceeded"));
+        assert!(is_recoverable_message("temporary error"));
+        assert!(is_recoverable_message("Request timeout"));
+        assert!(!is_recoverable_message("access denied"));
     }
 }
 
