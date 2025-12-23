@@ -64,7 +64,7 @@ pub trait LambdaService: Send + Sync + Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::mock::{MockCheckpointConfig, MockLambdaService};
+    use super::mock::{MockCheckpointConfig, MockGetStateConfig, MockLambdaService};
     use super::LambdaService;
     use crate::error::DurableError;
     use crate::types::{OperationAction, OperationType, OperationUpdate};
@@ -121,6 +121,50 @@ mod tests {
         let calls = mock.checkpoint_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].checkpoint_token, "token-1");
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_state_requires_responses() {
+        let mock = MockLambdaService::new();
+
+        let err = mock
+            .get_durable_execution_state(
+                "arn:aws:lambda:us-east-1:123:function:durable",
+                "token-1",
+                "marker-1",
+                50,
+            )
+            .await
+            .expect_err("missing responses should error");
+
+        match err {
+            DurableError::Internal(message) => {
+                assert!(message.contains("no get state responses queued"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_state_records_calls() {
+        let mock = MockLambdaService::new();
+
+        mock.expect_get_state(MockGetStateConfig::default());
+
+        mock.get_durable_execution_state(
+            "arn:aws:lambda:us-east-1:123:function:durable",
+            "token-1",
+            "marker-1",
+            50,
+        )
+        .await
+        .expect("get state should succeed");
+
+        let calls = mock.get_state_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].checkpoint_token, "token-1");
+        assert_eq!(calls[0].marker, "marker-1");
+        assert_eq!(calls[0].max_items, 50);
     }
 }
 
