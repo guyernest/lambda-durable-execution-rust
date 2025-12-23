@@ -1,5 +1,7 @@
 use super::*;
 
+mod replay;
+
 impl DurableContextHandle {
     /// Run operations in an isolated child context.
     ///
@@ -118,74 +120,26 @@ impl DurableContextImpl {
             .unwrap_or_else(|| "RunInChildContext".to_string());
 
         // Check if already completed in replay
-        if let Some(operation) = self.execution_ctx.get_step_data(&hashed_id).await {
-            match operation.status {
-                OperationStatus::Succeeded => {
-                    if operation
-                        .context_details
-                        .as_ref()
-                        .and_then(|d| d.replay_children)
-                        == Some(true)
-                    {
-                        // ReplayChildren mode: reconstruct the result by re-running the child
-                        // context while reading child operation outputs from replay state.
-                        let child_execution_ctx =
-                            self.execution_ctx.with_parent_id(hashed_id.clone());
-                        let child_impl = Arc::new(DurableContextImpl::new(child_execution_ctx));
-                        let child_ctx = DurableContextHandle::new(child_impl);
-                        return context_fn(child_ctx).await;
-                    }
-
-                    if let Some(ref details) = operation.context_details {
-                        if let Some(ref payload) = details.result {
-                            if let Some(val) = safe_deserialize(
-                                serdes.clone(),
-                                Some(payload.as_str()),
-                                &hashed_id,
-                                name,
-                                &self.execution_ctx,
-                            )
-                            .await
-                            {
-                                return Ok(val);
-                            }
-                        }
-                    }
-                    // Fallback for older payload locations.
-                    if let Some(ref details) = operation.execution_details {
-                        if let Some(ref payload) = details.output_payload {
-                            if let Some(val) = safe_deserialize(
-                                serdes.clone(),
-                                Some(payload.as_str()),
-                                &hashed_id,
-                                name,
-                                &self.execution_ctx,
-                            )
-                            .await
-                            {
-                                return Ok(val);
-                            }
-                        }
-                    }
-                }
-                OperationStatus::Failed => {
-                    let msg = operation
-                        .context_details
-                        .as_ref()
-                        .and_then(|d| d.error.as_ref())
-                        .map(|e| e.error_message.clone())
-                        .unwrap_or_else(|| "Child context failed".to_string());
-                    return Err(DurableError::ChildContextFailed {
-                        name: step_id,
-                        message: msg,
-                        source: None,
-                    });
-                }
-                _ => {
-                    // Incomplete child context during replay, continue execution.
-                    self.execution_ctx.set_mode(ExecutionMode::Execution).await;
-                }
+        match replay::evaluate_replay(
+            self.execution_ctx.get_step_data(&hashed_id).await,
+            serdes.clone(),
+            &hashed_id,
+            &step_id,
+            name,
+            &self.execution_ctx,
+        )
+        .await?
+        {
+            replay::ChildReplayDecision::Return(val) => return Ok(val),
+            replay::ChildReplayDecision::ReplayChildren => {
+                // ReplayChildren mode: reconstruct the result by re-running the child
+                // context while reading child operation outputs from replay state.
+                let child_execution_ctx = self.execution_ctx.with_parent_id(hashed_id.clone());
+                let child_impl = Arc::new(DurableContextImpl::new(child_execution_ctx));
+                let child_ctx = DurableContextHandle::new(child_impl);
+                return context_fn(child_ctx).await;
             }
+            replay::ChildReplayDecision::Continue => {}
         }
 
         // Checkpoint at start if not already started. This ensures any child operations that
