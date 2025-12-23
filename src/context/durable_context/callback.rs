@@ -1,5 +1,7 @@
 use super::*;
 
+mod replay;
+
 impl<T> CallbackHandle<T> {
     /// Get the callback ID to provide to external systems.
     ///
@@ -357,53 +359,17 @@ impl DurableContextImpl {
 
         // Backwards compatibility: if an older Callback operation exists at this id,
         // return/await it directly.
-        if let Some(operation) = self.execution_ctx.get_step_data(&hashed_id).await {
-            if operation.operation_type == OperationType::Callback {
-                return match operation.status {
-                    OperationStatus::Succeeded => {
-                        if let Some(ref details) = operation.callback_details {
-                            if let Some(ref payload) = details.result {
-                                if let Some(val) = safe_deserialize(
-                                    serdes,
-                                    Some(payload.as_str()),
-                                    &hashed_id,
-                                    name,
-                                    &self.execution_ctx,
-                                )
-                                .await
-                                {
-                                    return Ok(val);
-                                }
-                            }
-                        }
-                        Err(DurableError::Internal(
-                            "Missing callback result in replay".to_string(),
-                        ))
-                    }
-                    OperationStatus::Failed => {
-                        let error_msg = operation
-                            .callback_details
-                            .as_ref()
-                            .and_then(|d| d.error.as_ref())
-                            .map(|e| e.error_message.clone())
-                            .unwrap_or_else(|| "Unknown error".to_string());
-                        Err(DurableError::CallbackFailed {
-                            name: step_id,
-                            message: error_msg,
-                        })
-                    }
-                    _ => {
-                        // Pending/started - suspend.
-                        self.execution_ctx.set_mode(ExecutionMode::Execution).await;
-                        self.execution_ctx
-                            .termination_manager
-                            .terminate_for_callback()
-                            .await;
-                        std::future::pending::<()>().await;
-                        unreachable!()
-                    }
-                };
-            }
+        if let Some(result) = replay::handle_replay(
+            self.execution_ctx.get_step_data(&hashed_id).await,
+            serdes.clone(),
+            &hashed_id,
+            &step_id,
+            name,
+            &self.execution_ctx,
+        )
+        .await?
+        {
+            return Ok(result);
         }
 
         // Wrap callback creation + submitter in a child context.
