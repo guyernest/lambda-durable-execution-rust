@@ -638,4 +638,34 @@ mod tests {
 
         assert!(update.is_err());
     }
+
+    #[test]
+    fn test_operation_update_builder_rejects_negative_heartbeat_timeout() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::Callback)
+            .action(OperationAction::Start)
+            .callback_options(CallbackUpdateOptions {
+                timeout_seconds: None,
+                heartbeat_timeout_seconds: Some(-5),
+            })
+            .build();
+
+        assert!(update.is_err());
+    }
+
+    #[test]
+    fn test_operation_update_builder_rejects_empty_invoke_name() {
+        let update = OperationUpdate::builder()
+            .id("op-1")
+            .operation_type(OperationType::ChainedInvoke)
+            .action(OperationAction::Start)
+            .chained_invoke_options(ChainedInvokeUpdateOptions {
+                function_name: "   ".to_string(),
+                tenant_id: None,
+            })
+            .build();
+
+        assert!(update.is_err());
+    }
 }
