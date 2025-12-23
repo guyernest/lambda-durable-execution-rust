@@ -415,4 +415,18 @@ mod tests {
         let deserialized: ErrorObject = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.error_type, "StepFailed");
     }
+
+    #[test]
+    fn test_should_terminate_lambda_for_validation_errors() {
+        let ctx_error = DurableError::ContextValidationError {
+            message: "invalid context".to_string(),
+        };
+        assert!(ctx_error.should_terminate_lambda());
+
+        let internal = DurableError::Internal("internal".to_string());
+        assert!(internal.should_terminate_lambda());
+
+        let step_error = DurableError::step_failed_msg("step", 1, "boom");
+        assert!(!step_error.should_terminate_lambda());
+    }
 }
