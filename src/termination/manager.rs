@@ -335,4 +335,16 @@ mod tests {
         // The callback was invoked (though async execution means we can't guarantee it completed)
         assert!(manager.is_terminated().await);
     }
+
+    #[tokio::test]
+    async fn test_subscribe_receives_termination() {
+        let manager = TerminationManager::new();
+        let mut rx = manager.subscribe();
+
+        manager.terminate_for_wait().await;
+
+        rx.changed().await.expect("receiver should update");
+        let result = rx.borrow().clone().expect("termination result");
+        assert_eq!(result.reason, TerminationReason::WaitScheduled);
+    }
 }
