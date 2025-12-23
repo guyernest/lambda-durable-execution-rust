@@ -1,5 +1,6 @@
 use super::*;
 
+mod execute;
 mod replay;
 
 impl<T> CallbackHandle<T> {
@@ -20,59 +21,7 @@ impl<T> CallbackHandle<T> {
     where
         T: serde::de::DeserializeOwned + Send + Sync + 'static,
     {
-        if let Some(operation) = self.execution_ctx.get_step_data(&self.hashed_id).await {
-            match operation.status {
-                OperationStatus::Succeeded => {
-                    if let Some(details) = operation.callback_details.as_ref() {
-                        if let Some(payload) = details.result.as_ref() {
-                            if let Some(val) = safe_deserialize(
-                                self.serdes.clone(),
-                                Some(payload.as_str()),
-                                &self.hashed_id,
-                                Some(&self.step_id),
-                                &self.execution_ctx,
-                            )
-                            .await
-                            {
-                                return Ok(val);
-                            }
-                        }
-                    }
-                    return Err(DurableError::Internal(
-                        "Missing callback result in replay".to_string(),
-                    ));
-                }
-                OperationStatus::Failed => {
-                    let error_msg = operation
-                        .callback_details
-                        .as_ref()
-                        .and_then(|d| d.error.as_ref())
-                        .map(|e| e.error_message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    return Err(DurableError::CallbackFailed {
-                        name: self.step_id,
-                        message: error_msg,
-                    });
-                }
-                _ => {
-                    // Pending/started - suspend.
-                }
-            }
-        }
-
-        // Mark this operation as awaited before suspending
-        self.execution_ctx
-            .checkpoint_manager
-            .mark_awaited(&self.hashed_id)
-            .await;
-
-        self.execution_ctx
-            .termination_manager
-            .terminate_for_callback()
-            .await;
-
-        std::future::pending::<()>().await;
-        unreachable!()
+        execute::wait_for_callback(self).await
     }
 
     /// Wait for the callback to complete and return the raw payload string.
@@ -81,49 +30,7 @@ impl<T> CallbackHandle<T> {
     /// JS SDK two-phase behavior (child context returns a string; parent
     /// deserializes with custom Serdes).
     pub async fn wait_raw(self) -> DurableResult<String> {
-        if let Some(operation) = self.execution_ctx.get_step_data(&self.hashed_id).await {
-            match operation.status {
-                OperationStatus::Succeeded => {
-                    if let Some(details) = operation.callback_details.as_ref() {
-                        if let Some(payload) = details.result.as_ref() {
-                            return Ok(payload.clone());
-                        }
-                    }
-                    return Err(DurableError::Internal(
-                        "Missing callback result in replay".to_string(),
-                    ));
-                }
-                OperationStatus::Failed => {
-                    let error_msg = operation
-                        .callback_details
-                        .as_ref()
-                        .and_then(|d| d.error.as_ref())
-                        .map(|e| e.error_message.clone())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    return Err(DurableError::CallbackFailed {
-                        name: self.step_id,
-                        message: error_msg,
-                    });
-                }
-                _ => {
-                    // Pending/started - suspend.
-                }
-            }
-        }
-
-        // Mark this operation as awaited before suspending
-        self.execution_ctx
-            .checkpoint_manager
-            .mark_awaited(&self.hashed_id)
-            .await;
-
-        self.execution_ctx
-            .termination_manager
-            .terminate_for_callback()
-            .await;
-
-        std::future::pending::<()>().await;
-        unreachable!()
+        execute::wait_for_callback_raw(self).await
     }
 }
 
@@ -352,79 +259,6 @@ impl DurableContextImpl {
         F: FnOnce(String, StepContext) -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
     {
-        let step_id = self.execution_ctx.next_operation_id(name);
-        let hashed_id = Self::hash_id(&step_id);
-        let config = config.unwrap_or_default();
-        let serdes = config.serdes.clone();
-
-        // Backwards compatibility: if an older Callback operation exists at this id,
-        // return/await it directly.
-        if let Some(result) = replay::handle_replay(
-            self.execution_ctx.get_step_data(&hashed_id).await,
-            serdes.clone(),
-            &hashed_id,
-            &step_id,
-            name,
-            &self.execution_ctx,
-        )
-        .await?
-        {
-            return Ok(result);
-        }
-
-        // Wrap callback creation + submitter in a child context.
-        let submitter_retry = config.retry_strategy.clone();
-        let callback_cfg_for_child = config.clone();
-
-        let raw_payload: String = self
-            .run_in_child_context_with_ids(
-                step_id.clone(),
-                hashed_id.clone(),
-                name,
-                move |child_ctx| async move {
-                    let handle: CallbackHandle<T> = child_ctx
-                        .create_callback(None, Some(callback_cfg_for_child))
-                        .await?;
-                    let callback_id = handle.callback_id().to_string();
-
-                    let step_cfg = submitter_retry
-                        .clone()
-                        .map(|s| StepConfig::<()>::new().with_retry_strategy(s));
-
-                    child_ctx
-                        .step(
-                            Some("submitter"),
-                            move |step_ctx| async move {
-                                submitter(callback_id, step_ctx).await?;
-                                Ok(())
-                            },
-                            step_cfg,
-                        )
-                        .await?;
-
-                    handle.wait_raw().await
-                },
-                Some(ChildContextConfig::<String> {
-                    sub_type: Some("WaitForCallback".to_string()),
-                    ..Default::default()
-                }),
-            )
-            .await?;
-
-        if let Some(val) = safe_deserialize(
-            serdes,
-            Some(raw_payload.as_str()),
-            &hashed_id,
-            name,
-            &self.execution_ctx,
-        )
-        .await
-        {
-            Ok(val)
-        } else {
-            Err(DurableError::Internal(
-                "Missing callback result after wait".to_string(),
-            ))
-        }
+        execute::run_wait_for_callback(self, name, submitter, config).await
     }
 }
