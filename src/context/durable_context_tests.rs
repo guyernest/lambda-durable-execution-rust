@@ -1,15 +1,19 @@
 use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
 use crate::error::DurableError;
-use crate::mock::MockLambdaService;
+use crate::mock::{MockCheckpointConfig, MockLambdaService};
+use crate::retry::NoRetry;
+use crate::termination::TerminationReason;
 use crate::types::{
     BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult,
-    DurableExecutionInvocationInput, Duration, MapConfig, ParallelConfig, Serdes, SerdesContext,
+    CallbackConfig, DurableExecutionInvocationInput, Duration, MapConfig, OperationAction,
+    OperationType, ParallelConfig, Serdes, SerdesContext, StepConfig, StepSemantics,
     WaitConditionConfig, WaitConditionDecision,
 };
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 fn create_replay_input<T: serde::Serialize>(
     durable_execution_arn: &str,
@@ -52,6 +56,38 @@ async fn make_replay_context(
         .await
         .expect("execution context should initialize");
     DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)))
+}
+
+async fn make_replay_context_with_service(
+    durable_execution_arn: &str,
+    operations: Vec<serde_json::Value>,
+    lambda_service: Arc<MockLambdaService>,
+) -> DurableContextHandle {
+    let input_json = create_replay_input(durable_execution_arn, &json!({}), operations);
+    let input: DurableExecutionInvocationInput =
+        serde_json::from_value(input_json).expect("valid invocation input");
+
+    let exec_ctx = ExecutionContext::new(&input, lambda_service, None, true)
+        .await
+        .expect("execution context should initialize");
+    DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)))
+}
+
+async fn make_execution_context(
+    durable_execution_arn: &str,
+) -> (DurableContextHandle, Arc<MockLambdaService>) {
+    let input_json = create_replay_input(durable_execution_arn, &json!({}), vec![]);
+    let input: DurableExecutionInvocationInput =
+        serde_json::from_value(input_json).expect("valid invocation input");
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+        .await
+        .expect("execution context should initialize");
+    (
+        DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx))),
+        lambda_service,
+    )
 }
 
 struct StaticBatchSerdes<T> {
@@ -116,6 +152,120 @@ async fn test_step_replay_returns_cached_result() {
         .unwrap();
 
     assert_eq!(value, 123u32);
+}
+
+#[tokio::test]
+async fn test_step_execution_success_checkpoints_succeed() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let value: u32 = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move { Ok(99u32) },
+            None::<StepConfig<u32>>,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 99u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step && update.action == OperationAction::Succeed
+    }));
+}
+
+#[tokio::test]
+async fn test_step_execution_failure_no_retry_checkpoints_fail() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::<u32>::new().with_retry_strategy(Arc::new(NoRetry));
+    let err = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move {
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                ))
+            },
+            Some(config),
+        )
+        .await
+        .expect_err("step should fail without retry");
+
+    match err {
+        DurableError::StepFailed { message, attempts, .. } => {
+            assert!(message.contains("boom"));
+            assert_eq!(attempts, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step && update.action == OperationAction::Fail
+    }));
+}
+
+#[tokio::test]
+async fn test_step_replay_started_at_most_once_no_retry_fails() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 0 },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![step_op], lambda_service.clone()).await;
+    let config = StepConfig::new()
+        .with_semantics(StepSemantics::AtMostOncePerRetry)
+        .with_retry_strategy(Arc::new(NoRetry));
+    let err = ctx
+        .step(
+            Some("step"),
+            |_step_ctx| async move { Ok(1u32) },
+            Some(config),
+        )
+        .await
+        .expect_err("step should fail on interrupted at-most-once replay");
+
+    match err {
+        DurableError::StepFailed { message, .. } => {
+            assert!(message.contains("Step interrupted"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step && update.action == OperationAction::Fail
+    }));
 }
 
 #[tokio::test]
@@ -239,6 +389,28 @@ async fn test_wait_replay_succeeded_returns_ok() {
 }
 
 #[tokio::test]
+async fn test_wait_execution_suspends_after_checkpoint() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait(Some("wait"), Duration::seconds(1)),
+    )
+    .await;
+    assert!(result.is_err(), "wait should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination reason should be recorded");
+    assert_eq!(termination.reason, TerminationReason::WaitScheduled);
+}
+
+#[tokio::test]
 async fn test_wait_replay_failed_returns_error() {
     let arn = "arn:test:durable";
     let step_id = "wait_0".to_string();
@@ -265,6 +437,146 @@ async fn test_wait_zero_duration_returns_immediately() {
     ctx.wait(Some("wait"), Duration::seconds(0))
         .await
         .expect("zero duration should return");
+}
+
+#[tokio::test]
+async fn test_create_callback_execution_checkpoints_start_with_options() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = CallbackConfig::<serde_json::Value>::new()
+        .with_timeout(Duration::seconds(10))
+        .with_heartbeat_timeout(Duration::seconds(3));
+
+    let handle = ctx
+        .create_callback(Some("callback"), Some(config))
+        .await
+        .unwrap();
+
+    let hashed_id = CheckpointManager::hash_id("callback_0");
+    assert_eq!(handle.callback_id(), format!("{arn}:{hashed_id}"));
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|u| u.operation_type == OperationType::Callback)
+        .expect("callback update");
+    assert_eq!(update.action, OperationAction::Start);
+    let options = update.callback_options.as_ref().expect("callback options");
+    assert_eq!(options.timeout_seconds, Some(10));
+    assert_eq!(options.heartbeat_timeout_seconds, Some(3));
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let value: u32 = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(7u32) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 7u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Context && update.action == OperationAction::Succeed
+    }));
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let err = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Err(DurableError::Internal("boom".to_string())) },
+            None::<crate::types::ChildContextConfig<u32>>,
+        )
+        .await
+        .expect_err("child context should fail");
+
+    match err {
+        DurableError::ChildContextFailed { message, .. } => {
+            assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Context && update.action == OperationAction::Fail
+    }));
+}
+
+#[tokio::test]
+async fn test_map_empty_items_with_batch_serdes() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let batch_serdes = Arc::new(StaticBatchSerdes::<u32> {
+        items: Vec::new(),
+        completion_reason: BatchCompletionReason::AllCompleted,
+    });
+    let config = MapConfig::new().with_serdes(batch_serdes);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            Vec::<u32>::new(),
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run for empty items");
+                #[allow(unreachable_code)]
+                Ok::<u32, crate::error::DurableError>(0)
+            },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Context
+            && update.action == OperationAction::Succeed
+            && update.payload.as_deref() == Some("payload")
+    }));
 }
 
 #[tokio::test]
