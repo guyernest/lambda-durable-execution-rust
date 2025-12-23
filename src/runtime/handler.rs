@@ -498,8 +498,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::DurableError;
     use crate::mock::MockLambdaService;
     use crate::types::{ExecutionDetails, InitialExecutionState, Operation, OperationStatus};
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -677,5 +679,152 @@ mod tests {
         assert_eq!(update.operation_type, OperationType::Execution);
         assert_eq!(update.action, OperationAction::Succeed);
         assert!(update.payload.as_ref().unwrap().len() > LAMBDA_RESPONSE_SIZE_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn test_handler_error_returns_failed_output() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async {
+                Err::<serde_json::Value, _>(DurableError::Internal("boom".to_string()))
+            },
+            config,
+        )
+        .await
+        .expect("handler error should map to invocation output");
+
+        assert_eq!(output.status, crate::types::InvocationStatus::Failed);
+        let err = output.error.expect("error object");
+        assert_eq!(err.error_type, "Internal");
+        assert!(err.error_message.contains("boom"));
+    }
+
+    #[derive(Debug)]
+    struct BadSerialize;
+
+    impl Serialize for BadSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("nope"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_output_serialization_failure_returns_lambda_error() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(BadSerialize) },
+            config,
+        )
+        .await
+        .expect_err("serialization error should surface");
+
+        assert!(err.to_string().contains("Failed to serialize output"));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SampleEvent {
+        value: u32,
+    }
+
+    #[tokio::test]
+    async fn test_input_deserialization_failure_returns_lambda_error() {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some("{\"value\":\"oops\"}".to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |event: SampleEvent, _ctx| async move { Ok(json!({ "ok": event.value })) },
+            config,
+        )
+        .await
+        .expect_err("deserialization error should surface");
+
+        assert!(err.to_string().contains("Failed to deserialize input"));
     }
 }
