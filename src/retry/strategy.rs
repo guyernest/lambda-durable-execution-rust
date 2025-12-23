@@ -478,6 +478,67 @@ mod tests {
     }
 
     #[test]
+    fn test_exponential_backoff_jitter_ranges() {
+        let error = io::Error::new(io::ErrorKind::TimedOut, "timeout");
+
+        let jitter_none = ExponentialBackoff::builder()
+            .max_attempts(3)
+            .initial_delay(Duration::seconds(10))
+            .max_delay(Duration::seconds(10))
+            .jitter(JitterStrategy::None)
+            .build();
+
+        let jitter_full = ExponentialBackoff::builder()
+            .max_attempts(3)
+            .initial_delay(Duration::seconds(10))
+            .max_delay(Duration::seconds(10))
+            .jitter(JitterStrategy::Full)
+            .build();
+        let jitter_half = ExponentialBackoff::builder()
+            .max_attempts(3)
+            .initial_delay(Duration::seconds(10))
+            .max_delay(Duration::seconds(10))
+            .jitter(JitterStrategy::Half)
+            .build();
+        let jitter_equal = ExponentialBackoff::builder()
+            .max_attempts(3)
+            .initial_delay(Duration::seconds(10))
+            .max_delay(Duration::seconds(10))
+            .jitter(JitterStrategy::Equal)
+            .build();
+
+        let none_delay = jitter_none
+            .should_retry(&error, 1)
+            .delay
+            .unwrap()
+            .to_seconds();
+        assert_eq!(none_delay, 10);
+
+        for _ in 0..50 {
+            let full = jitter_full
+                .should_retry(&error, 1)
+                .delay
+                .unwrap()
+                .to_seconds();
+            assert!((1..=10).contains(&full));
+
+            let half = jitter_half
+                .should_retry(&error, 1)
+                .delay
+                .unwrap()
+                .to_seconds();
+            assert!((5..=10).contains(&half));
+
+            let equal = jitter_equal
+                .should_retry(&error, 1)
+                .delay
+                .unwrap()
+                .to_seconds();
+            assert!((5..=10).contains(&equal));
+        }
+    }
+
+    #[test]
     fn test_fixed_retry() {
         let strategy = FixedRetry::new(2);
         let error = io::Error::other("error");
