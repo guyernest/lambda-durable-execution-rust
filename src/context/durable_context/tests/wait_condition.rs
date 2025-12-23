@@ -118,3 +118,38 @@ async fn test_wait_for_condition_replay_failed_returns_error() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_stop_succeeds() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 1);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step
+            && update.action == OperationAction::Succeed
+            && update.sub_type.as_deref() == Some("WaitForCondition")
+    }));
+}
