@@ -611,6 +611,74 @@ fn validate_completion_config(
     Ok(())
 }
 
+fn has_completion_criteria(config: &crate::types::CompletionConfig) -> bool {
+    config.min_successful.is_some()
+        || config.tolerated_failure_count.is_some()
+        || config.tolerated_failure_percentage.is_some()
+}
+
+fn should_continue_batch(
+    failure_count: usize,
+    total_items: usize,
+    config: &crate::types::CompletionConfig,
+) -> bool {
+    if !has_completion_criteria(config) {
+        return failure_count == 0;
+    }
+    if let Some(tol) = config.tolerated_failure_count {
+        if failure_count > tol {
+            return false;
+        }
+    }
+    if let Some(pct) = config.tolerated_failure_percentage {
+        if total_items > 0 {
+            let failure_pct = (failure_count as f64 / total_items as f64) * 100.0;
+            if failure_pct > pct {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn compute_batch_completion_reason(
+    failure_count: usize,
+    success_count: usize,
+    completed_count: usize,
+    total_items: usize,
+    config: &crate::types::CompletionConfig,
+) -> BatchCompletionReason {
+    if !should_continue_batch(failure_count, total_items, config) {
+        BatchCompletionReason::FailureToleranceExceeded
+    } else if completed_count == total_items {
+        BatchCompletionReason::AllCompleted
+    } else if let Some(min) = config.min_successful {
+        if success_count >= min {
+            BatchCompletionReason::MinSuccessfulReached
+        } else {
+            BatchCompletionReason::AllCompleted
+        }
+    } else {
+        BatchCompletionReason::AllCompleted
+    }
+}
+
+fn batch_completion_reason_str(reason: BatchCompletionReason) -> &'static str {
+    match reason {
+        BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
+        BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
+        BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
+    }
+}
+
+fn batch_status_str(failure_count: usize) -> &'static str {
+    if failure_count > 0 {
+        "FAILED"
+    } else {
+        "SUCCEEDED"
+    }
+}
+
 impl DurableContextHandle {
     /// Create a new handle from an implementation.
     pub fn new(inner: Arc<DurableContextImpl>) -> Self {
@@ -1110,45 +1178,19 @@ impl DurableContextHandle {
         let item_namer = cfg.item_namer.clone();
         let batch_serdes = cfg.serdes.clone();
 
-        let has_any_completion_criteria = cfg.completion_config.min_successful.is_some()
-            || cfg.completion_config.tolerated_failure_count.is_some()
-            || cfg.completion_config.tolerated_failure_percentage.is_some();
-
         let should_continue = |failure_count: usize| -> bool {
-            if !has_any_completion_criteria {
-                return failure_count == 0;
-            }
-            if let Some(tol) = cfg.completion_config.tolerated_failure_count {
-                if failure_count > tol {
-                    return false;
-                }
-            }
-            if let Some(pct) = cfg.completion_config.tolerated_failure_percentage {
-                if items_len > 0 {
-                    let failure_pct = (failure_count as f64 / items_len as f64) * 100.0;
-                    if failure_pct > pct {
-                        return false;
-                    }
-                }
-            }
-            true
+            should_continue_batch(failure_count, items_len, &cfg.completion_config)
         };
 
         let compute_completion_reason =
             |failure_count: usize, success_count: usize, completed_count: usize| {
-                if !should_continue(failure_count) {
-                    BatchCompletionReason::FailureToleranceExceeded
-                } else if completed_count == items_len {
-                    BatchCompletionReason::AllCompleted
-                } else if let Some(min) = cfg.completion_config.min_successful {
-                    if success_count >= min {
-                        BatchCompletionReason::MinSuccessfulReached
-                    } else {
-                        BatchCompletionReason::AllCompleted
-                    }
-                } else {
-                    BatchCompletionReason::AllCompleted
-                }
+                compute_batch_completion_reason(
+                    failure_count,
+                    success_count,
+                    completed_count,
+                    items_len,
+                    &cfg.completion_config,
+                )
             };
 
         // Start top-level MAP context for observability.
@@ -1397,12 +1439,8 @@ impl DurableContextHandle {
 
         if items_len == 0 {
             let completion_reason = compute_completion_reason(0, 0, 0);
-            let status_str = "SUCCEEDED";
-            let reason_str = match completion_reason {
-                BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
-                BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
-                BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
-            };
+            let status_str = batch_status_str(0);
+            let reason_str = batch_completion_reason_str(completion_reason);
 
             let batch_result = BatchResult {
                 all: Vec::new(),
@@ -1543,16 +1581,8 @@ impl DurableContextHandle {
                     compute_completion_reason(failure_count, success_count, completed_count);
                 let started_count = started_indices.len();
                 let total_count = completed_count + started_count;
-                let status_str = if failure_count > 0 {
-                    "FAILED"
-                } else {
-                    "SUCCEEDED"
-                };
-                let reason_str = match completion_reason {
-                    BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
-                    BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
-                    BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
-                };
+                let status_str = batch_status_str(failure_count);
+                let reason_str = batch_completion_reason_str(completion_reason);
 
                 let mut all = Vec::new();
                 for (i, v) in successes {
@@ -1638,16 +1668,8 @@ impl DurableContextHandle {
 
         let completion_reason =
             compute_completion_reason(failure_count, success_count, completed_count);
-        let status_str = if failure_count > 0 {
-            "FAILED"
-        } else {
-            "SUCCEEDED"
-        };
-        let reason_str = match completion_reason {
-            BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
-            BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
-            BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
-        };
+        let status_str = batch_status_str(failure_count);
+        let reason_str = batch_completion_reason_str(completion_reason);
 
         let mut all = Vec::new();
         for (i, v) in successes {
@@ -2158,45 +2180,19 @@ impl DurableContextHandle {
         let item_serdes = cfg.item_serdes.clone();
         let batch_serdes = cfg.serdes.clone();
 
-        let has_any_completion_criteria = cfg.completion_config.min_successful.is_some()
-            || cfg.completion_config.tolerated_failure_count.is_some()
-            || cfg.completion_config.tolerated_failure_percentage.is_some();
-
         let should_continue = |failure_count: usize| -> bool {
-            if !has_any_completion_criteria {
-                return failure_count == 0;
-            }
-            if let Some(tol) = cfg.completion_config.tolerated_failure_count {
-                if failure_count > tol {
-                    return false;
-                }
-            }
-            if let Some(pct) = cfg.completion_config.tolerated_failure_percentage {
-                if branches_len > 0 {
-                    let failure_pct = (failure_count as f64 / branches_len as f64) * 100.0;
-                    if failure_pct > pct {
-                        return false;
-                    }
-                }
-            }
-            true
+            should_continue_batch(failure_count, branches_len, &cfg.completion_config)
         };
 
         let compute_completion_reason =
             |failure_count: usize, success_count: usize, completed_count: usize| {
-                if !should_continue(failure_count) {
-                    BatchCompletionReason::FailureToleranceExceeded
-                } else if completed_count == branches_len {
-                    BatchCompletionReason::AllCompleted
-                } else if let Some(min) = cfg.completion_config.min_successful {
-                    if success_count >= min {
-                        BatchCompletionReason::MinSuccessfulReached
-                    } else {
-                        BatchCompletionReason::AllCompleted
-                    }
-                } else {
-                    BatchCompletionReason::AllCompleted
-                }
+                compute_batch_completion_reason(
+                    failure_count,
+                    success_count,
+                    completed_count,
+                    branches_len,
+                    &cfg.completion_config,
+                )
             };
 
         // Start top-level PARALLEL context.
@@ -2537,16 +2533,8 @@ impl DurableContextHandle {
                     compute_completion_reason(failure_count, success_count, completed_count);
                 let started_count = started_indices.len();
                 let total_count = completed_count + started_count;
-                let status_str = if failure_count > 0 {
-                    "FAILED"
-                } else {
-                    "SUCCEEDED"
-                };
-                let reason_str = match completion_reason {
-                    BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
-                    BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
-                    BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
-                };
+                let status_str = batch_status_str(failure_count);
+                let reason_str = batch_completion_reason_str(completion_reason);
 
                 let mut all = Vec::new();
                 for (i, v) in successes {
@@ -2633,16 +2621,8 @@ impl DurableContextHandle {
 
         let completion_reason =
             compute_completion_reason(failure_count, success_count, completed_count);
-        let status_str = if failure_count > 0 {
-            "FAILED"
-        } else {
-            "SUCCEEDED"
-        };
-        let reason_str = match completion_reason {
-            BatchCompletionReason::AllCompleted => "ALL_COMPLETED",
-            BatchCompletionReason::MinSuccessfulReached => "MIN_SUCCESSFUL_REACHED",
-            BatchCompletionReason::FailureToleranceExceeded => "FAILURE_TOLERANCE_EXCEEDED",
-        };
+        let status_str = batch_status_str(failure_count);
+        let reason_str = batch_completion_reason_str(completion_reason);
 
         let mut all = Vec::new();
         for (i, v) in successes {
@@ -3999,6 +3979,59 @@ mod tests {
 
         let config = CompletionConfig::new().with_tolerated_failure_percentage(f64::NAN);
         assert!(validate_completion_config(&config, 2, "parallel").is_err());
+    }
+
+    #[test]
+    fn test_should_continue_batch_default_behavior() {
+        let config = CompletionConfig::new();
+        assert!(should_continue_batch(0, 3, &config));
+        assert!(!should_continue_batch(1, 3, &config));
+    }
+
+    #[test]
+    fn test_should_continue_batch_tolerated_failure_count() {
+        let config = CompletionConfig::new().with_tolerated_failures(1);
+        assert!(should_continue_batch(1, 5, &config));
+        assert!(!should_continue_batch(2, 5, &config));
+    }
+
+    #[test]
+    fn test_should_continue_batch_tolerated_failure_percentage() {
+        let config = CompletionConfig::new().with_tolerated_failure_percentage(50.0);
+        assert!(should_continue_batch(2, 4, &config));
+        assert!(!should_continue_batch(3, 4, &config));
+    }
+
+    #[test]
+    fn test_compute_batch_completion_reason_min_successful() {
+        let config = CompletionConfig::new().with_min_successful(2);
+        let reason = compute_batch_completion_reason(1, 2, 3, 5, &config);
+        assert_eq!(reason, BatchCompletionReason::MinSuccessfulReached);
+    }
+
+    #[test]
+    fn test_compute_batch_completion_reason_failure_tolerance_exceeded() {
+        let config = CompletionConfig::new().with_tolerated_failures(0);
+        let reason = compute_batch_completion_reason(1, 0, 1, 3, &config);
+        assert_eq!(reason, BatchCompletionReason::FailureToleranceExceeded);
+    }
+
+    #[test]
+    fn test_batch_completion_strings() {
+        assert_eq!(
+            batch_completion_reason_str(BatchCompletionReason::AllCompleted),
+            "ALL_COMPLETED"
+        );
+        assert_eq!(
+            batch_completion_reason_str(BatchCompletionReason::MinSuccessfulReached),
+            "MIN_SUCCESSFUL_REACHED"
+        );
+        assert_eq!(
+            batch_completion_reason_str(BatchCompletionReason::FailureToleranceExceeded),
+            "FAILURE_TOLERANCE_EXCEEDED"
+        );
+        assert_eq!(batch_status_str(0), "SUCCEEDED");
+        assert_eq!(batch_status_str(1), "FAILED");
     }
 }
 

@@ -1,12 +1,12 @@
-use super::{DurableContextHandle, DurableContextImpl, ExecutionContext};
+use super::{BoxFuture, DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
 use crate::error::DurableError;
 use crate::mock::{MockCheckpointConfig, MockLambdaService};
 use crate::retry::NoRetry;
 use crate::termination::TerminationReason;
 use crate::types::{
-    BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult,
-    CallbackConfig, DurableExecutionInvocationInput, Duration, MapConfig, OperationAction,
+    BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult, CallbackConfig,
+    CompletionConfig, DurableExecutionInvocationInput, Duration, MapConfig, OperationAction,
     OperationType, ParallelConfig, Serdes, SerdesContext, StepConfig, StepSemantics,
     WaitConditionConfig, WaitConditionDecision,
 };
@@ -126,6 +126,74 @@ impl<T: Clone + Send + Sync> Serdes<BatchResult<T>> for StaticBatchSerdes<T> {
     }
 }
 
+struct SerializeFailSerdes;
+
+#[async_trait]
+impl Serdes<u32> for SerializeFailSerdes {
+    async fn serialize(
+        &self,
+        _value: Option<&u32>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, crate::error::BoxError> {
+        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+            std::io::Error::new(std::io::ErrorKind::Other, "serialize failed"),
+        ))
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<u32>, crate::error::BoxError> {
+        Ok(Some(1))
+    }
+}
+
+struct DeserializeFailSerdes;
+
+#[async_trait]
+impl Serdes<u32> for DeserializeFailSerdes {
+    async fn serialize(
+        &self,
+        _value: Option<&u32>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, crate::error::BoxError> {
+        Ok(Some("1".to_string()))
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<u32>, crate::error::BoxError> {
+        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+            std::io::Error::new(std::io::ErrorKind::Other, "deserialize failed"),
+        ))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BranchBehavior {
+    Ok(u32),
+    Fail(&'static str),
+    Panic(&'static str),
+}
+
+fn make_parallel_branch(
+    behavior: BranchBehavior,
+) -> impl Fn(DurableContextHandle) -> BoxFuture<'static, Result<u32, DurableError>> + Send + Sync + 'static
+{
+    move |_ctx| {
+        Box::pin(async move {
+            match behavior {
+                BranchBehavior::Ok(value) => Ok(value),
+                BranchBehavior::Fail(message) => Err(DurableError::Internal(message.to_string())),
+                BranchBehavior::Panic(message) => panic!("{message}"),
+            }
+        })
+    }
+}
+
 #[tokio::test]
 async fn test_step_replay_returns_cached_result() {
     let arn = "arn:test:durable";
@@ -206,7 +274,9 @@ async fn test_step_execution_failure_no_retry_checkpoints_fail() {
         .expect_err("step should fail without retry");
 
     match err {
-        DurableError::StepFailed { message, attempts, .. } => {
+        DurableError::StepFailed {
+            message, attempts, ..
+        } => {
             assert!(message.contains("boom"));
             assert_eq!(attempts, 1);
         }
@@ -266,6 +336,65 @@ async fn test_step_replay_started_at_most_once_no_retry_fails() {
     assert!(updates.iter().any(|update| {
         update.operation_type == OperationType::Step && update.action == OperationAction::Fail
     }));
+}
+
+#[tokio::test]
+async fn test_step_serdes_serialize_failure_terminates() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::new().with_serdes(Arc::new(SerializeFailSerdes));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(Some("step"), |_ctx| async move { Ok(1u32) }, Some(config)),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend on serdes failure");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::SerdesFailed);
+    let message = termination.message.unwrap_or_default();
+    assert!(message.contains("Serialization failed"));
+}
+
+#[tokio::test]
+async fn test_step_serdes_deserialize_failure_terminates() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&1u32).unwrap();
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Result": payload, "Attempt": 0 },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let config = StepConfig::new().with_serdes(Arc::new(DeserializeFailSerdes));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(Some("step"), |_ctx| async move { Ok(1u32) }, Some(config)),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend on serdes failure");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::SerdesFailed);
+    let message = termination.message.unwrap_or_default();
+    assert!(message.contains("Deserialization failed"));
 }
 
 #[tokio::test]
@@ -482,11 +611,7 @@ async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 
     let value: u32 = ctx
-        .run_in_child_context(
-            Some("child"),
-            |_child_ctx| async move { Ok(7u32) },
-            None,
-        )
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(7u32) }, None)
         .await
         .unwrap();
 
@@ -577,6 +702,80 @@ async fn test_map_empty_items_with_batch_serdes() {
             && update.action == OperationAction::Succeed
             && update.payload.as_deref() == Some("payload")
     }));
+}
+
+#[tokio::test]
+async fn test_map_min_successful_completes_early() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_min_successful(1);
+    let config = MapConfig::new()
+        .with_max_concurrency(1)
+        .with_completion_config(completion);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32, 3u32],
+            |item, _child_ctx, idx| async move {
+                if idx == 0 {
+                    Ok::<u32, DurableError>(item + 1)
+                } else {
+                    panic!("map should stop after min_successful");
+                }
+            },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::MinSuccessfulReached
+    );
+    assert_eq!(batch.success_count(), 1);
+}
+
+#[tokio::test]
+async fn test_map_failure_tolerance_exceeded() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_tolerated_failures(0);
+    let config = MapConfig::new()
+        .with_max_concurrency(1)
+        .with_completion_config(completion);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |_item, _child_ctx, idx| async move {
+                if idx == 0 {
+                    Err(DurableError::Internal("boom".to_string()))
+                } else {
+                    panic!("map should stop after failure tolerance exceeded");
+                }
+            },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::FailureToleranceExceeded
+    );
+    assert_eq!(batch.failure_count(), 1);
 }
 
 #[tokio::test]
@@ -1256,6 +1455,72 @@ async fn test_parallel_replay_failed_returns_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_parallel_min_successful_completes_early() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_min_successful(1);
+    let config = ParallelConfig::new()
+        .with_max_concurrency(1)
+        .with_completion_config(completion);
+
+    let branches = vec![
+        make_parallel_branch(BranchBehavior::Ok(10)),
+        make_parallel_branch(BranchBehavior::Panic(
+            "parallel should stop after min_successful",
+        )),
+    ];
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::MinSuccessfulReached
+    );
+    assert_eq!(batch.success_count(), 1);
+}
+
+#[tokio::test]
+async fn test_parallel_failure_tolerance_exceeded() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_tolerated_failures(0);
+    let config = ParallelConfig::new()
+        .with_max_concurrency(1)
+        .with_completion_config(completion);
+
+    let branches = vec![
+        make_parallel_branch(BranchBehavior::Fail("boom")),
+        make_parallel_branch(BranchBehavior::Panic(
+            "parallel should stop after failure tolerance exceeded",
+        )),
+    ];
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::FailureToleranceExceeded
+    );
+    assert_eq!(batch.failure_count(), 1);
 }
 
 #[tokio::test]
