@@ -66,8 +66,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-mod internal;
-use internal::*;
+mod batch;
+mod serdes;
+use batch::*;
+use serdes::*;
 mod callback;
 mod child;
 mod invoke;
