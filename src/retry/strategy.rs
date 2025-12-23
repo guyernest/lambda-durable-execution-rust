@@ -570,4 +570,22 @@ mod tests {
 
         assert!(!strategy.should_retry(&error, 3).should_retry);
     }
+
+    #[test]
+    fn test_retry_decision_builders() {
+        let decision = RetryDecision::retry_after(Duration::seconds(3));
+        assert!(decision.should_retry);
+        assert_eq!(decision.delay.unwrap().to_seconds(), 3);
+
+        let decision = RetryDecision::retry_immediately();
+        assert!(decision.should_retry);
+        assert!(decision.delay.is_none());
+
+        let decision = RetryDecision::no_retry_with_reason("nope");
+        assert!(!decision.should_retry);
+        assert_eq!(decision.reason.as_deref(), Some("nope"));
+
+        let decision = RetryDecision::no_retry().with_reason("later");
+        assert_eq!(decision.reason.as_deref(), Some("later"));
+    }
 }
