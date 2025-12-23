@@ -347,4 +347,13 @@ mod tests {
         let result = rx.borrow().clone().expect("termination result");
         assert_eq!(result.reason, TerminationReason::WaitScheduled);
     }
+
+    #[tokio::test]
+    async fn test_get_termination_result_none_until_terminated() {
+        let manager = TerminationManager::new();
+        assert!(manager.get_termination_result().is_none());
+
+        manager.terminate_for_retry().await;
+        assert!(manager.get_termination_result().is_some());
+    }
 }
