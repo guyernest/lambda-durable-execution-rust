@@ -1,5 +1,6 @@
 use super::*;
 
+mod execute;
 mod replay;
 
 impl DurableContextHandle {
@@ -133,57 +134,16 @@ impl DurableContextImpl {
             return Ok(result);
         }
 
-        // Serialize input using custom Serdes if provided.
-        let input_payload = safe_serialize(
-            payload_serdes,
-            input.as_ref(),
-            &hashed_id,
+        execute::run_invoke_execution(
+            self,
             name,
-            &self.execution_ctx,
+            function_id,
+            input,
+            payload_serdes,
+            tenant_id,
+            step_id,
+            hashed_id,
         )
-        .await;
-
-        // Checkpoint START for chained invoke
-        let parent_id = self.execution_ctx.get_parent_id().await;
-        let mut builder = OperationUpdate::builder()
-            .id(&hashed_id)
-            .operation_type(OperationType::ChainedInvoke)
-            .sub_type("ChainedInvoke")
-            .action(OperationAction::Start)
-            .chained_invoke_options(ChainedInvokeUpdateOptions {
-                function_name: function_id.to_string(),
-                tenant_id,
-            });
-
-        if let Some(pid) = parent_id {
-            builder = builder.parent_id(pid);
-        }
-        if let Some(n) = name {
-            builder = builder.name(n);
-        }
-        if let Some(payload) = input_payload {
-            builder = builder.payload(payload);
-        }
-
-        self.execution_ctx
-            .checkpoint_manager
-            .checkpoint(
-                step_id.clone(),
-                builder.build().map_err(|e| {
-                    DurableError::Internal(format!(
-                        "Failed to build chained invoke START update: {e}"
-                    ))
-                })?,
-            )
-            .await?;
-
-        // Suspend so the service can perform the invoke.
-        self.execution_ctx
-            .termination_manager
-            .terminate_for_invoke()
-            .await;
-
-        std::future::pending::<()>().await;
-        unreachable!()
+        .await
     }
 }
