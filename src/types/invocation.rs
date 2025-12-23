@@ -639,6 +639,27 @@ mod tests {
     }
 
     #[test]
+    fn test_flexible_timestamp_deserializes_multiple_formats() {
+        let ts: FlexibleTimestamp = serde_json::from_str("\"2024-01-01T00:00:00Z\"").unwrap();
+        match ts {
+            FlexibleTimestamp::String(value) => assert!(value.contains("2024-01-01")),
+            _ => panic!("expected string timestamp"),
+        }
+
+        let ts: FlexibleTimestamp = serde_json::from_str("1700000000000").unwrap();
+        match ts {
+            FlexibleTimestamp::Millis(value) => assert_eq!(value, 1700000000000),
+            _ => panic!("expected millis timestamp"),
+        }
+    }
+
+    #[test]
+    fn test_operation_status_unknown_variant() {
+        let status: OperationStatus = serde_json::from_str("\"FUTURE_STATUS\"").unwrap();
+        assert_eq!(status, OperationStatus::Unknown);
+    }
+
+    #[test]
     fn test_operation_update_builder_rejects_negative_timeout() {
         let update = OperationUpdate::builder()
             .id("op-1")
