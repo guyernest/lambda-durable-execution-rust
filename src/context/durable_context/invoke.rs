@@ -1,5 +1,7 @@
 use super::*;
 
+mod replay;
+
 impl DurableContextHandle {
     /// Invoke another durable Lambda function.
     ///
@@ -118,55 +120,17 @@ impl DurableContextImpl {
         let tenant_id = config.as_ref().and_then(|c| c.tenant_id.clone());
 
         // Replay handling
-        if let Some(operation) = self.execution_ctx.get_step_data(&hashed_id).await {
-            return match operation.status {
-                OperationStatus::Succeeded => {
-                    if let Some(ref details) = operation.chained_invoke_details {
-                        if let Some(ref payload) = details.result {
-                            let val = safe_deserialize(
-                                result_serdes,
-                                Some(payload.as_str()),
-                                &hashed_id,
-                                name,
-                                &self.execution_ctx,
-                            )
-                            .await
-                            .ok_or_else(|| {
-                                DurableError::Internal(
-                                    "Missing invoke result in replay".to_string(),
-                                )
-                            })?;
-                            return Ok(val);
-                        }
-                    }
-                    Err(DurableError::Internal(
-                        "Missing invoke result in replay".to_string(),
-                    ))
-                }
-                OperationStatus::Failed => {
-                    let msg = operation
-                        .chained_invoke_details
-                        .as_ref()
-                        .and_then(|d| d.error.as_ref())
-                        .map(|e| e.error_message.clone())
-                        .unwrap_or_else(|| "Invoke failed".to_string());
-                    Err(DurableError::InvocationFailed {
-                        function: function_id.to_string(),
-                        message: msg,
-                        source: None,
-                    })
-                }
-                _ => {
-                    // Pending or started - suspend until completion
-                    self.execution_ctx.set_mode(ExecutionMode::Execution).await;
-                    self.execution_ctx
-                        .termination_manager
-                        .terminate_for_invoke()
-                        .await;
-                    std::future::pending::<()>().await;
-                    unreachable!()
-                }
-            };
+        if let Some(result) = replay::handle_replay(
+            self.execution_ctx.get_step_data(&hashed_id).await,
+            result_serdes,
+            &hashed_id,
+            name,
+            function_id,
+            &self.execution_ctx,
+        )
+        .await?
+        {
+            return Ok(result);
         }
 
         // Serialize input using custom Serdes if provided.
