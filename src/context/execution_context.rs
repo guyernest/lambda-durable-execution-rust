@@ -365,4 +365,57 @@ mod tests {
         ctx.set_mode(ExecutionMode::Replay).await;
         assert_eq!(ctx.get_mode().await, ExecutionMode::Replay);
     }
+
+    #[tokio::test]
+    async fn test_get_step_data_returns_operation() {
+        let mock = Arc::new(MockLambdaService::new());
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: crate::types::InitialExecutionState {
+                operations: vec![
+                    Operation {
+                        id: "execution".to_string(),
+                        parent_id: None,
+                        name: None,
+                        operation_type: OperationType::Execution,
+                        sub_type: None,
+                        status: OperationStatus::Started,
+                        step_details: None,
+                        callback_details: None,
+                        wait_details: None,
+                        execution_details: Some(ExecutionDetails {
+                            input_payload: Some("{}".to_string()),
+                            output_payload: None,
+                        }),
+                        context_details: None,
+                        chained_invoke_details: None,
+                    },
+                    Operation {
+                        id: "step-1".to_string(),
+                        parent_id: None,
+                        name: Some("step".to_string()),
+                        operation_type: OperationType::Step,
+                        sub_type: None,
+                        status: OperationStatus::Succeeded,
+                        step_details: None,
+                        callback_details: None,
+                        wait_details: None,
+                        execution_details: None,
+                        context_details: None,
+                        chained_invoke_details: None,
+                    },
+                ],
+                next_marker: None,
+            },
+        };
+
+        let ctx = ExecutionContext::new(&input, mock, None, true)
+            .await
+            .expect("execution context should initialize");
+
+        let op = ctx.get_step_data("step-1").await.expect("step data");
+        assert_eq!(op.status, OperationStatus::Succeeded);
+        assert_eq!(op.name.as_deref(), Some("step"));
+    }
 }
