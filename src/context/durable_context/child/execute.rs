@@ -1,0 +1,140 @@
+use super::super::*;
+
+pub(super) async fn run_child_execution<T, F, Fut>(
+    ctx: &DurableContextImpl,
+    step_id: String,
+    hashed_id: String,
+    name: Option<&str>,
+    context_fn: F,
+    sub_type: String,
+    serdes: Option<Arc<dyn Serdes<T>>>,
+) -> DurableResult<T>
+where
+    T: Serialize + DeserializeOwned + Send + Sync + 'static,
+    F: FnOnce(DurableContextHandle) -> Fut + Send + 'static,
+    Fut: Future<Output = DurableResult<T>> + Send + 'static,
+{
+    // Checkpoint at start if not already started. This ensures any child operations that
+    // reference `ParentId` (this context) are valid to the backend.
+    if ctx.execution_ctx.get_step_data(&hashed_id).await.is_none() {
+        let parent_id = ctx.execution_ctx.get_parent_id().await;
+        let mut builder = OperationUpdate::builder()
+            .id(&hashed_id)
+            .operation_type(OperationType::Context)
+            .sub_type(sub_type.clone())
+            .action(OperationAction::Start);
+
+        if let Some(pid) = parent_id {
+            builder = builder.parent_id(pid);
+        }
+        if let Some(n) = name {
+            builder = builder.name(n);
+        }
+
+        ctx.execution_ctx
+            .checkpoint_manager
+            .checkpoint(
+                step_id.clone(),
+                builder.build().map_err(|e| {
+                    DurableError::Internal(format!(
+                        "Failed to build child context START update: {e}"
+                    ))
+                })?,
+            )
+            .await?;
+    }
+
+    // Create child context
+    let child_execution_ctx = ctx.execution_ctx.with_parent_id(hashed_id.clone());
+    let child_impl = Arc::new(DurableContextImpl::new(child_execution_ctx));
+    let child_ctx = DurableContextHandle::new(child_impl);
+
+    // Execute child context
+    let result = match context_fn(child_ctx).await {
+        Ok(val) => val,
+        Err(error) => {
+            let err_obj = ErrorObject::from_durable_error(&error);
+            let parent_id = ctx.execution_ctx.get_parent_id().await;
+
+            let mut builder = OperationUpdate::builder()
+                .id(&hashed_id)
+                .operation_type(OperationType::Context)
+                .sub_type(sub_type)
+                .action(OperationAction::Fail)
+                .error(err_obj.clone());
+
+            if let Some(pid) = parent_id {
+                builder = builder.parent_id(pid);
+            }
+            if let Some(n) = name {
+                builder = builder.name(n);
+            }
+
+            ctx.execution_ctx
+                .checkpoint_manager
+                .checkpoint(
+                    step_id.clone(),
+                    builder.build().map_err(|e| {
+                        DurableError::Internal(format!(
+                            "Failed to build child context FAIL update: {e}"
+                        ))
+                    })?,
+                )
+                .await?;
+
+            return Err(DurableError::ChildContextFailed {
+                name: step_id,
+                message: err_obj.error_message,
+                source: Some(Arc::new(Box::new(error))),
+            });
+        }
+    };
+
+    // Checkpoint child context completion
+    let mut payload =
+        safe_serialize(serdes, Some(&result), &hashed_id, name, &ctx.execution_ctx).await;
+    let mut replay_children = false;
+    if let Some(ref p) = payload {
+        if p.len() > CHECKPOINT_SIZE_LIMIT_BYTES {
+            replay_children = true;
+            payload = Some(String::new());
+        }
+    }
+
+    let parent_id = ctx.execution_ctx.get_parent_id().await;
+    let mut builder = OperationUpdate::builder()
+        .id(&hashed_id)
+        .operation_type(OperationType::Context)
+        .sub_type(sub_type)
+        .action(OperationAction::Succeed);
+
+    if replay_children {
+        builder = builder.context_options(ContextUpdateOptions {
+            replay_children: Some(true),
+        });
+    }
+
+    if let Some(p) = payload {
+        builder = builder.payload(p);
+    }
+
+    if let Some(pid) = parent_id {
+        builder = builder.parent_id(pid);
+    }
+    if let Some(n) = name {
+        builder = builder.name(n);
+    }
+    ctx.execution_ctx
+        .checkpoint_manager
+        .checkpoint(
+            step_id,
+            builder.build().map_err(|e| {
+                DurableError::Internal(format!(
+                    "Failed to build child context completion update: {e}"
+                ))
+            })?,
+        )
+        .await?;
+
+    Ok(result)
+}
