@@ -622,6 +622,8 @@ impl DurableExecutionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock::MockLambdaService;
+    use std::sync::Arc;
 
     #[test]
     fn test_step_config_builder() {
@@ -655,5 +657,26 @@ mod tests {
         assert_eq!(config.max_concurrency, Some(5));
         assert_eq!(config.completion_config.min_successful, Some(3));
         assert_eq!(config.completion_config.tolerated_failure_count, Some(2));
+    }
+
+    #[test]
+    fn test_durable_execution_config_with_lambda_service() {
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        assert!(config.lambda_service.is_some());
+    }
+
+    #[test]
+    fn test_durable_execution_config_with_lambda_client() {
+        let sdk_config = aws_sdk_lambda::Config::builder()
+            .region(aws_sdk_lambda::config::Region::new("us-east-1"))
+            .behavior_version(aws_sdk_lambda::config::BehaviorVersion::latest())
+            .build();
+        let client = aws_sdk_lambda::Client::from_conf(sdk_config);
+
+        let config = DurableExecutionConfig::new().with_lambda_client(client);
+
+        assert!(config.lambda_service.is_some());
     }
 }
