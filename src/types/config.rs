@@ -623,6 +623,7 @@ impl DurableExecutionConfig {
 mod tests {
     use super::*;
     use crate::mock::MockLambdaService;
+    use crate::retry::NoRetry;
     use crate::types::JsonSerdes;
     use std::sync::Arc;
 
@@ -670,6 +671,14 @@ mod tests {
         assert_eq!(config.initial_state, 0);
         assert_eq!(config.max_attempts, Some(3));
         assert!(config.serdes.is_some());
+    }
+
+    #[test]
+    fn test_step_config_with_retry_strategy() {
+        let config: StepConfig<String> =
+            StepConfig::new().with_retry_strategy(Arc::new(NoRetry::new()));
+
+        assert!(config.retry_strategy.is_some());
     }
 
     #[test]
