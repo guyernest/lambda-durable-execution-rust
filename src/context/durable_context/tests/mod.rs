@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::CompletionConfig;
 
+mod helpers;
 mod operations;
 
 #[test]
