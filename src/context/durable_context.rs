@@ -679,6 +679,40 @@ fn batch_status_str(failure_count: usize) -> &'static str {
     }
 }
 
+fn map_summary_payload(
+    total_count: usize,
+    success_count: usize,
+    failure_count: usize,
+    completion_reason: BatchCompletionReason,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "MapResult",
+        "totalCount": total_count,
+        "successCount": success_count,
+        "failureCount": failure_count,
+        "completionReason": batch_completion_reason_str(completion_reason),
+        "status": batch_status_str(failure_count),
+    })
+}
+
+fn parallel_summary_payload(
+    total_count: usize,
+    success_count: usize,
+    failure_count: usize,
+    started_count: usize,
+    completion_reason: BatchCompletionReason,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "ParallelResult",
+        "totalCount": total_count,
+        "successCount": success_count,
+        "failureCount": failure_count,
+        "startedCount": started_count,
+        "completionReason": batch_completion_reason_str(completion_reason),
+        "status": batch_status_str(failure_count),
+    })
+}
+
 impl DurableContextHandle {
     /// Create a new handle from an implementation.
     pub fn new(inner: Arc<DurableContextImpl>) -> Self {
@@ -1439,9 +1473,6 @@ impl DurableContextHandle {
 
         if items_len == 0 {
             let completion_reason = compute_completion_reason(0, 0, 0);
-            let status_str = batch_status_str(0);
-            let reason_str = batch_completion_reason_str(completion_reason);
-
             let batch_result = BatchResult {
                 all: Vec::new(),
                 completion_reason,
@@ -1459,14 +1490,7 @@ impl DurableContextHandle {
             } else {
                 safe_serialize(
                     None,
-                    Some(&serde_json::json!({
-                    "type": "MapResult",
-                    "totalCount": 0,
-                    "successCount": 0,
-                    "failureCount": 0,
-                    "completionReason": reason_str,
-                    "status": status_str,
-                    })),
+                    Some(&map_summary_payload(0, 0, 0, completion_reason)),
                     &map_hashed_id,
                     name,
                     &self.inner.execution_ctx,
@@ -1581,9 +1605,6 @@ impl DurableContextHandle {
                     compute_completion_reason(failure_count, success_count, completed_count);
                 let started_count = started_indices.len();
                 let total_count = completed_count + started_count;
-                let status_str = batch_status_str(failure_count);
-                let reason_str = batch_completion_reason_str(completion_reason);
-
                 let mut all = Vec::new();
                 for (i, v) in successes {
                     all.push(BatchItem {
@@ -1628,14 +1649,12 @@ impl DurableContextHandle {
                 } else {
                     safe_serialize(
                         None,
-                        Some(&serde_json::json!({
-                        "type": "MapResult",
-                        "totalCount": total_count,
-                        "successCount": success_count,
-                        "failureCount": failure_count,
-                        "completionReason": reason_str,
-                        "status": status_str,
-                        })),
+                        Some(&map_summary_payload(
+                            total_count,
+                            success_count,
+                            failure_count,
+                            completion_reason,
+                        )),
                         &map_hashed_id,
                         name,
                         &self.inner.execution_ctx,
@@ -1668,9 +1687,6 @@ impl DurableContextHandle {
 
         let completion_reason =
             compute_completion_reason(failure_count, success_count, completed_count);
-        let status_str = batch_status_str(failure_count);
-        let reason_str = batch_completion_reason_str(completion_reason);
-
         let mut all = Vec::new();
         for (i, v) in successes {
             all.push(BatchItem {
@@ -1707,14 +1723,12 @@ impl DurableContextHandle {
         } else {
             safe_serialize(
                 None,
-                Some(&serde_json::json!({
-                "type": "MapResult",
-                "totalCount": completed_count,
-                "successCount": success_count,
-                "failureCount": failure_count,
-                "completionReason": reason_str,
-                "status": status_str,
-                })),
+                Some(&map_summary_payload(
+                    completed_count,
+                    success_count,
+                    failure_count,
+                    completion_reason,
+                )),
                 &map_hashed_id,
                 name,
                 &self.inner.execution_ctx,
@@ -2533,9 +2547,6 @@ impl DurableContextHandle {
                     compute_completion_reason(failure_count, success_count, completed_count);
                 let started_count = started_indices.len();
                 let total_count = completed_count + started_count;
-                let status_str = batch_status_str(failure_count);
-                let reason_str = batch_completion_reason_str(completion_reason);
-
                 let mut all = Vec::new();
                 for (i, v) in successes {
                     all.push(BatchItem {
@@ -2580,15 +2591,13 @@ impl DurableContextHandle {
                 } else {
                     safe_serialize(
                         None,
-                        Some(&serde_json::json!({
-                        "type": "ParallelResult",
-                        "totalCount": total_count,
-                        "successCount": success_count,
-                        "failureCount": failure_count,
-                        "startedCount": started_count,
-                        "completionReason": reason_str,
-                        "status": status_str,
-                        })),
+                        Some(&parallel_summary_payload(
+                            total_count,
+                            success_count,
+                            failure_count,
+                            started_count,
+                            completion_reason,
+                        )),
                         &par_hashed_id,
                         name,
                         &self.inner.execution_ctx,
@@ -2621,9 +2630,6 @@ impl DurableContextHandle {
 
         let completion_reason =
             compute_completion_reason(failure_count, success_count, completed_count);
-        let status_str = batch_status_str(failure_count);
-        let reason_str = batch_completion_reason_str(completion_reason);
-
         let mut all = Vec::new();
         for (i, v) in successes {
             all.push(BatchItem {
@@ -2660,15 +2666,13 @@ impl DurableContextHandle {
         } else {
             safe_serialize(
                 None,
-                Some(&serde_json::json!({
-                "type": "ParallelResult",
-                "totalCount": completed_count,
-                "successCount": success_count,
-                "failureCount": failure_count,
-                "startedCount": 0,
-                "completionReason": reason_str,
-                "status": status_str,
-                })),
+                Some(&parallel_summary_payload(
+                    completed_count,
+                    success_count,
+                    failure_count,
+                    0,
+                    completion_reason,
+                )),
                 &par_hashed_id,
                 name,
                 &self.inner.execution_ctx,
@@ -4032,6 +4036,30 @@ mod tests {
         );
         assert_eq!(batch_status_str(0), "SUCCEEDED");
         assert_eq!(batch_status_str(1), "FAILED");
+    }
+
+    #[test]
+    fn test_map_summary_payload_fields() {
+        let payload = map_summary_payload(3, 2, 1, BatchCompletionReason::FailureToleranceExceeded);
+        assert_eq!(payload["type"], "MapResult");
+        assert_eq!(payload["totalCount"], 3);
+        assert_eq!(payload["successCount"], 2);
+        assert_eq!(payload["failureCount"], 1);
+        assert_eq!(payload["completionReason"], "FAILURE_TOLERANCE_EXCEEDED");
+        assert_eq!(payload["status"], "FAILED");
+    }
+
+    #[test]
+    fn test_parallel_summary_payload_fields() {
+        let payload =
+            parallel_summary_payload(4, 3, 1, 2, BatchCompletionReason::MinSuccessfulReached);
+        assert_eq!(payload["type"], "ParallelResult");
+        assert_eq!(payload["totalCount"], 4);
+        assert_eq!(payload["successCount"], 3);
+        assert_eq!(payload["failureCount"], 1);
+        assert_eq!(payload["startedCount"], 2);
+        assert_eq!(payload["completionReason"], "MIN_SUCCESSFUL_REACHED");
+        assert_eq!(payload["status"], "FAILED");
     }
 }
 
