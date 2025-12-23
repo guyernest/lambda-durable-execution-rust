@@ -120,8 +120,6 @@
 //! ```
 
 mod durable_context;
-#[cfg(test)]
-mod durable_context_tests;
 mod execution_context;
 mod step_context;
 

@@ -1,5 +1,5 @@
-use super::{BoxFuture, DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::checkpoint::CheckpointManager;
+use crate::context::{BoxFuture, DurableContextHandle, DurableContextImpl, ExecutionContext};
 use crate::error::DurableError;
 use crate::mock::{MockCheckpointConfig, MockLambdaService};
 use crate::retry::NoRetry;
@@ -1041,7 +1041,7 @@ async fn test_map_replay_skips_incomplete_children() {
     let ctx = make_replay_context(arn, vec![map_op, child0_op, child1_op]).await;
 
     let items = vec![10u32, 20u32, 30u32];
-    let batch: super::BatchResult<u32> = ctx
+    let batch: BatchResult<u32> = ctx
         .map(
             name,
             items,
@@ -2063,7 +2063,7 @@ async fn test_parallel_replay_skips_incomplete_children() {
     };
     let branches = vec![branch, branch];
 
-    let batch: super::BatchResult<String> = ctx.parallel(name, branches, None).await.unwrap();
+    let batch: BatchResult<String> = ctx.parallel(name, branches, None).await.unwrap();
     assert_eq!(batch.success_count(), 1);
     assert_eq!(batch.failure_count(), 0);
     assert_eq!(batch.values(), vec!["ok".to_string()]);

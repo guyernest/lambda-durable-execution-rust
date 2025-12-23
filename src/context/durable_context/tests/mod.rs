@@ -1,6 +1,8 @@
 use super::*;
 use crate::types::CompletionConfig;
 
+mod operations;
+
 #[test]
 fn test_validate_completion_config_ok() {
     let config = CompletionConfig::new()
