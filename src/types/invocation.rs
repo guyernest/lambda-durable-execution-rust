@@ -660,6 +660,22 @@ mod tests {
     }
 
     #[test]
+    fn test_invocation_output_failed_sets_error() {
+        let error = ErrorObject {
+            error_type: "Error".to_string(),
+            error_message: "boom".to_string(),
+            details: None,
+        };
+        let output = DurableExecutionInvocationOutput::failed(error);
+
+        assert_eq!(output.status, InvocationStatus::Failed);
+        let err = output.error.expect("error payload");
+        assert_eq!(err.error_type, "Error");
+        assert_eq!(err.error_message, "boom");
+        assert!(output.result.is_none());
+    }
+
+    #[test]
     fn test_operation_update_builder_rejects_negative_timeout() {
         let update = OperationUpdate::builder()
             .id("op-1")
