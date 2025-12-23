@@ -1,5 +1,7 @@
 use super::*;
 
+mod replay;
+
 impl DurableContextHandle {
     /// Wait for a condition by periodically re-running a check function.
     ///
@@ -24,49 +26,17 @@ impl DurableContextHandle {
         let hashed_id = DurableContextImpl::hash_id(&step_id);
 
         // Replay short-circuit.
-        if let Some(operation) = self.inner.execution_ctx.get_step_data(&hashed_id).await {
-            match operation.status {
-                OperationStatus::Succeeded => {
-                    if let Some(details) = operation.step_details {
-                        if let Some(payload) = details.result {
-                            if let Some(val) = safe_deserialize(
-                                serdes.clone(),
-                                Some(payload.as_str()),
-                                &hashed_id,
-                                name,
-                                &self.inner.execution_ctx,
-                            )
-                            .await
-                            {
-                                return Ok(val);
-                            }
-                        }
-                    }
-                    return Err(DurableError::Internal(
-                        "Missing wait-for-condition result in replay".to_string(),
-                    ));
-                }
-                OperationStatus::Failed => {
-                    let attempts = operation
-                        .step_details
-                        .as_ref()
-                        .and_then(|d| d.attempt)
-                        .unwrap_or(1);
-                    let msg = operation
-                        .step_details
-                        .as_ref()
-                        .and_then(|d| d.error.as_ref())
-                        .map(|e| e.error_message.clone())
-                        .unwrap_or_else(|| "Wait for condition failed".to_string());
-                    return Err(DurableError::step_failed_msg(step_id, attempts, msg));
-                }
-                _ => {
-                    self.inner
-                        .execution_ctx
-                        .set_mode(ExecutionMode::Execution)
-                        .await;
-                }
-            }
+        if let Some(result) = replay::handle_replay(
+            self.inner.execution_ctx.get_step_data(&hashed_id).await,
+            serdes.clone(),
+            &hashed_id,
+            &step_id,
+            name,
+            &self.inner.execution_ctx,
+        )
+        .await?
+        {
+            return Ok(result);
         }
 
         // Get current state from replay if present.
