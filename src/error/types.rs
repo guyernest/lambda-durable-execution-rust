@@ -383,6 +383,8 @@ fn error_type_name(error: &DurableError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
+    use std::fmt;
 
     #[test]
     fn test_step_failed_error() {
@@ -428,5 +430,79 @@ mod tests {
 
         let step_error = DurableError::step_failed_msg("step", 1, "boom");
         assert!(!step_error.should_terminate_lambda());
+    }
+
+    #[derive(Debug)]
+    struct OuterError {
+        message: &'static str,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    }
+
+    impl fmt::Display for OuterError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.message)
+        }
+    }
+
+    impl Error for OuterError {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|err| err as &(dyn Error + 'static))
+        }
+    }
+
+    #[test]
+    fn test_error_object_from_error_includes_source() {
+        let inner = std::io::Error::new(std::io::ErrorKind::Other, "inner");
+        let err = OuterError {
+            message: "outer",
+            source: Some(Box::new(inner)),
+        };
+
+        let obj = ErrorObject::from_error(&err);
+        assert_eq!(obj.error_type, "Error");
+        assert_eq!(obj.error_message, "outer");
+        assert_eq!(obj.details.as_deref(), Some("inner"));
+    }
+
+    #[test]
+    fn test_error_object_defaults_missing_type() {
+        let json = r#"{"ErrorMessage":"oops"}"#;
+        let obj: ErrorObject = serde_json::from_str(json).unwrap();
+        assert_eq!(obj.error_type, "Error");
+        assert_eq!(obj.error_message, "oops");
+    }
+
+    #[test]
+    fn test_aws_sdk_error_wraps_source() {
+        let err = std::io::Error::other("sdk failure");
+        let wrapped = DurableError::aws_sdk(err);
+
+        match &wrapped {
+            DurableError::AwsSdk { message, source } => {
+                assert!(message.contains("sdk failure"));
+                assert!(source.is_some());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!wrapped.is_recoverable());
+    }
+
+    #[test]
+    fn test_serialization_failed_sets_source() {
+        let err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let failure = DurableError::serialization_failed("step", err);
+
+        match &failure {
+            DurableError::SerializationFailed {
+                operation, source, ..
+            } => {
+                assert_eq!(operation, "step");
+                assert!(source.is_some());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!failure.is_recoverable());
     }
 }

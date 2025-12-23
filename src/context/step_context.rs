@@ -273,4 +273,74 @@ mod tests {
         ctx.info("hello");
         assert_eq!(*count.lock().unwrap(), 1);
     }
+
+    #[derive(Debug, Clone)]
+    struct LogEntry {
+        level: DurableLogLevel,
+        data: DurableLogData,
+        message: String,
+        fields: Option<Vec<(String, String)>>,
+    }
+
+    #[derive(Default)]
+    struct RecordingLogger {
+        entries: Arc<Mutex<Vec<LogEntry>>>,
+    }
+
+    impl DurableLogger for RecordingLogger {
+        fn log(
+            &self,
+            level: DurableLogLevel,
+            data: &DurableLogData,
+            message: &str,
+            fields: Option<&[(&'static str, String)]>,
+        ) {
+            let fields = fields.map(|items| {
+                items
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), value.clone()))
+                    .collect()
+            });
+            self.entries.lock().unwrap().push(LogEntry {
+                level,
+                data: data.clone(),
+                message: message.to_string(),
+                fields,
+            });
+        }
+    }
+
+    #[test]
+    fn test_log_methods_capture_metadata() {
+        let entries = Arc::new(Mutex::new(Vec::new()));
+        let logger = Arc::new(RecordingLogger {
+            entries: Arc::clone(&entries),
+        });
+
+        let ctx = StepContext::new_with_logger(
+            Some("step".to_string()),
+            "op-1".to_string(),
+            "arn:test".to_string(),
+            logger,
+            ExecutionMode::Execution,
+            false,
+            Some(2),
+        );
+
+        ctx.debug("debug");
+        ctx.warn("warn");
+        ctx.error("error");
+        ctx.debug_with("debug-fields", || vec![("k", "v".to_string())]);
+        ctx.info_with("info-fields", || vec![("a", "b".to_string())]);
+
+        let logs = entries.lock().unwrap();
+        assert_eq!(logs.len(), 5);
+        assert_eq!(logs[0].level, DurableLogLevel::Debug);
+        assert_eq!(logs[0].data.operation_id.as_deref(), Some("op-1"));
+        assert_eq!(logs[0].data.step_name.as_deref(), Some("step"));
+        assert_eq!(logs[0].data.attempt, Some(2));
+        assert_eq!(logs[3].fields.as_ref().unwrap()[0].0, "k");
+        assert_eq!(logs[3].fields.as_ref().unwrap()[0].1, "v");
+        assert_eq!(logs[4].message, "info-fields");
+    }
 }
