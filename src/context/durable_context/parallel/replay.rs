@@ -447,4 +447,78 @@ mod tests {
             BatchCompletionReason::AllCompleted
         );
     }
+
+    #[tokio::test]
+    async fn test_maybe_replay_parallel_succeeded_missing_result_returns_none() {
+        let arn = "arn:test:durable";
+        let step_id = "parallel_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let op = json!({
+            "Id": hashed_id,
+            "Type": "CONTEXT",
+            "SubType": "Parallel",
+            "Status": "SUCCEEDED",
+        });
+
+        let execution_ctx = make_execution_context(arn, vec![op]).await;
+        fn branch_fn(
+            _ctx: DurableContextHandle,
+        ) -> BoxFuture<'static, crate::error::DurableResult<u32>> {
+            Box::pin(async move { Ok(1) })
+        }
+        let branches: Vec<NamedParallelBranch<_>> = vec![NamedParallelBranch::new(branch_fn)];
+
+        let result = maybe_replay_parallel::<u32, _>(
+            Some("parallel"),
+            &branches,
+            &None,
+            &None,
+            &execution_ctx,
+            &hashed_id,
+            &CompletionConfig::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_maybe_replay_parallel_missing_child_operation_returns_batch() {
+        let arn = "arn:test:durable";
+        let step_id = "parallel_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let payload = json!({ "totalCount": 1 }).to_string();
+        let op = json!({
+            "Id": hashed_id,
+            "Type": "CONTEXT",
+            "SubType": "Parallel",
+            "Status": "SUCCEEDED",
+            "ContextDetails": { "Result": payload },
+        });
+
+        let execution_ctx = make_execution_context(arn, vec![op]).await;
+        fn branch_fn(
+            _ctx: DurableContextHandle,
+        ) -> BoxFuture<'static, crate::error::DurableResult<u32>> {
+            Box::pin(async move { Ok(1) })
+        }
+        let branches: Vec<NamedParallelBranch<_>> = vec![NamedParallelBranch::new(branch_fn)];
+
+        let result = maybe_replay_parallel::<u32, _>(
+            Some("parallel"),
+            &branches,
+            &None,
+            &None,
+            &execution_ctx,
+            &hashed_id,
+            &CompletionConfig::new(),
+        )
+        .await
+        .unwrap()
+        .expect("batch result");
+
+        assert!(result.all.is_empty());
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
 }

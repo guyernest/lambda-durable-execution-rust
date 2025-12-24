@@ -209,6 +209,7 @@ where
 mod tests {
     use super::*;
     use crate::error::DurableError;
+    use crate::error::DurableResult;
     use crate::mock::{MockCheckpointConfig, MockLambdaService};
     use crate::types::{
         ExecutionDetails, InitialExecutionState, InvocationStatus, Operation, OperationStatus,
@@ -281,6 +282,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_execute_missing_input_payload_returns_error() {
+        let input = input_with_payload(None);
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect_err("missing input payload should error");
+
+        assert!(err
+            .to_string()
+            .contains("Missing input payload in execution operation"));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SampleEvent {
+        value: u32,
+    }
+
+    #[tokio::test]
+    async fn test_execute_input_deserialization_failure_returns_error() {
+        let input = input_with_payload(Some("{\"value\":\"oops\"}".to_string()));
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |event: SampleEvent, _ctx| async move { Ok(json!({ "ok": event.value })) },
+            config,
+        )
+        .await
+        .expect_err("deserialization should fail");
+
+        assert!(err.to_string().contains("Failed to deserialize input"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_handler_error_returns_failed_output() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = input_with_payload(Some(input_payload));
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async {
+                Err::<serde_json::Value, _>(DurableError::Internal("boom".to_string()))
+            },
+            config,
+        )
+        .await
+        .expect("handler error should map to invocation output");
+
+        assert_eq!(output.status, InvocationStatus::Failed);
+        let err = output.error.expect("error object");
+        assert!(err.error_message.contains("boom"));
+    }
+
+    #[tokio::test]
     async fn test_execute_large_payload_checkpoint_failure_returns_empty_result() {
         let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
         let input = input_with_payload(Some(input_payload));
@@ -324,5 +388,29 @@ mod tests {
         .expect("handler should succeed");
 
         assert_eq!(output.status, InvocationStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn test_execute_termination_wait_returns_pending() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = input_with_payload(Some(input_payload));
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate_for_wait()
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect("wait termination should return pending");
+
+        assert_eq!(output.status, InvocationStatus::Pending);
     }
 }

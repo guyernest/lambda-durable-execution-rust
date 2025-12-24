@@ -138,3 +138,105 @@ where
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::types::{
+        DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState, Operation,
+        OperationStatus, OperationType,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+
+    async fn make_execution_context() -> (ExecutionContext, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(json!({}).to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (exec_ctx, lambda_service)
+    }
+
+    #[tokio::test]
+    async fn test_run_child_execution_success_direct() {
+        let step_id = "child_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let value: u32 = run_child_execution(
+            &ctx,
+            step_id,
+            hashed_id,
+            Some("child"),
+            |_child_ctx| async move { Ok(7u32) },
+            "RunInChildContext".to_string(),
+            None,
+        )
+        .await
+        .expect("child should succeed");
+
+        assert_eq!(value, 7);
+    }
+
+    #[tokio::test]
+    async fn test_run_child_execution_failure_direct() {
+        let step_id = "child_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let err = run_child_execution(
+            &ctx,
+            step_id,
+            hashed_id,
+            Some("child"),
+            |_child_ctx| async move { Err(DurableError::Internal("boom".to_string())) },
+            "RunInChildContext".to_string(),
+            None::<Arc<dyn Serdes<u32>>>,
+        )
+        .await
+        .expect_err("child should fail");
+
+        match err {
+            DurableError::ChildContextFailed { message, .. } => {
+                assert!(message.contains("boom"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}

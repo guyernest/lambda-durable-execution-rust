@@ -260,13 +260,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::BoxError;
     use crate::mock::{MockCheckpointConfig, MockLambdaService};
     use crate::types::{
         CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState,
-        Operation, OperationStatus, OperationType,
+        Operation, OperationStatus, OperationType, SerdesContext,
     };
+    use async_trait::async_trait;
     use serde_json::json;
     use std::sync::Arc;
+
+    struct BatchSerdes;
+
+    #[async_trait]
+    impl Serdes<BatchResult<u32>> for BatchSerdes {
+        async fn serialize(
+            &self,
+            _value: Option<&BatchResult<u32>>,
+            _context: SerdesContext,
+        ) -> Result<Option<String>, BoxError> {
+            Ok(Some("payload".to_string()))
+        }
+
+        async fn deserialize(
+            &self,
+            _data: Option<&str>,
+            _context: SerdesContext,
+        ) -> Result<Option<BatchResult<u32>>, BoxError> {
+            Ok(None)
+        }
+    }
 
     async fn make_execution_context() -> (Arc<DurableContextImpl>, Arc<MockLambdaService>) {
         let input = DurableExecutionInvocationInput {
@@ -333,6 +356,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_run_map_execution_empty_items_with_batch_serdes() {
+        let (inner, lambda_service) = make_execution_context().await;
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+        let map_step_id = "map_0".to_string();
+        let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+        let cfg = MapConfig::<u32, u32>::new().with_serdes(Arc::new(BatchSerdes));
+        let map_fn = Arc::new(|_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+            Ok::<u32, DurableError>(0)
+        });
+
+        let result = run_map_execution(
+            inner,
+            Some("map"),
+            Vec::new(),
+            map_fn,
+            cfg,
+            None,
+            None,
+            Some(Arc::new(BatchSerdes)),
+            map_step_id,
+            map_hashed_id,
+        )
+        .await
+        .expect("map should succeed");
+
+        assert!(result.all.is_empty());
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+
+    #[tokio::test]
     async fn test_run_map_execution_mixed_results() {
         let (inner, lambda_service) = make_execution_context().await;
         for _ in 0..8 {
@@ -371,5 +425,38 @@ mod tests {
         assert_eq!(result.success_count(), 1);
         assert_eq!(result.failure_count(), 1);
         assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+
+    #[tokio::test]
+    async fn test_run_map_execution_uses_batch_serdes() {
+        let (inner, lambda_service) = make_execution_context().await;
+        for _ in 0..4 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let map_step_id = "map_0".to_string();
+        let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+        let cfg = MapConfig::new().with_serdes(Arc::new(BatchSerdes));
+
+        let map_fn = Arc::new(|item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+            Ok::<u32, DurableError>(item + 1)
+        });
+
+        let result = run_map_execution(
+            inner,
+            Some("map"),
+            vec![1u32],
+            map_fn,
+            cfg,
+            None,
+            None,
+            Some(Arc::new(BatchSerdes)),
+            map_step_id,
+            map_hashed_id,
+        )
+        .await
+        .expect("map should succeed");
+
+        assert_eq!(result.success_count(), 1);
     }
 }
