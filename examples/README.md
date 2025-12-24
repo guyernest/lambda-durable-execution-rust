@@ -9,21 +9,21 @@ Prereqs:
 - AWS SAM CLI with the Rust `rust-cargolambda` build method enabled (preview).
 - `uv` (for running the validator script).
 
-Build and deploy to `us-east-1`:
+Build and deploy from this directory (`examples/`). The defaults are in `samconfig.toml` (stack name, region, parameters, `CAPABILITY_IAM`, `resolve_s3`, beta features), so you can run:
 ```bash
-sam build -t examples/template.yaml --beta-features
-sam deploy -t examples/template.yaml --guided --region us-east-1 --stack-name durable-rust
+sam build
+sam deploy
 ```
 
 ## Validate & regenerate diagrams
 
-Run all deployed examples, save artifacts under `examples/.durable-validation`, and regenerate Mermaid + Markdown diagrams under `examples/diagrams/`:
+Run all deployed examples, save artifacts under `.durable-validation`, and regenerate Mermaid + Markdown diagrams under `diagrams/`:
 ```bash
-uv run examples/scripts/validate.py \
+uv run scripts/validate.py \
   --region us-east-1 \
   --stack durable-rust \
-  --out examples/.durable-validation \
-  --diagrams-out examples/diagrams \
+  --out .durable-validation \
+  --diagrams-out diagrams \
   --mermaid \
   --timeout-seconds 240
 ```
