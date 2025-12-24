@@ -553,6 +553,37 @@ async fn test_map_execution_min_successful_aborts_inflight() {
 }
 
 #[tokio::test]
+async fn test_map_execution_panicking_child_returns_join_error() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let err = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("boom");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .expect_err("panic should surface as join error");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Child task join error"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_map_replay_includes_failed_and_started_children() {
     let arn = "arn:test:durable";
     let name = Some("map");

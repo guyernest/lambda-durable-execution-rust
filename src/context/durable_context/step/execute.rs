@@ -114,6 +114,7 @@ where
 
             Ok(result)
         }
+
         Err(error) => {
             let attempts_made = attempt;
             let decision = retry_strategy.should_retry(error.as_ref(), attempts_made);
@@ -196,5 +197,111 @@ where
                 error,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::BoxError;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::retry::NoRetry;
+    use crate::types::{
+        DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState, Operation,
+        OperationStatus, OperationType, StepDetails,
+    };
+    use std::sync::Arc;
+
+    async fn make_execution_context_with_op(
+        op: Operation,
+    ) -> (ExecutionContext, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![
+                    Operation {
+                        id: "execution".to_string(),
+                        parent_id: None,
+                        name: None,
+                        operation_type: OperationType::Execution,
+                        sub_type: None,
+                        status: OperationStatus::Started,
+                        step_details: None,
+                        callback_details: None,
+                        wait_details: None,
+                        execution_details: Some(ExecutionDetails {
+                            input_payload: Some("{}".to_string()),
+                            output_payload: None,
+                        }),
+                        context_details: None,
+                        chained_invoke_details: None,
+                    },
+                    op,
+                ],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (exec_ctx, lambda_service)
+    }
+
+    #[tokio::test]
+    async fn test_run_step_execution_skips_start_when_already_started() {
+        let step_id = "step_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let op = Operation {
+            id: hashed_id.clone(),
+            parent_id: None,
+            name: None,
+            operation_type: OperationType::Step,
+            sub_type: Some("Step".to_string()),
+            status: OperationStatus::Started,
+            step_details: Some(StepDetails {
+                attempt: Some(2),
+                next_attempt_timestamp: None,
+                result: None,
+                error: None,
+            }),
+            callback_details: None,
+            wait_details: None,
+            execution_details: None,
+            context_details: None,
+            chained_invoke_details: None,
+        };
+
+        let (exec_ctx, lambda_service) = make_execution_context_with_op(op.clone()).await;
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let result: u32 = run_step_execution(
+            &ctx,
+            Some("step"),
+            |step_ctx| async move { Ok::<u32, BoxError>(step_ctx.attempt().unwrap_or(0)) },
+            step_id.clone(),
+            hashed_id.clone(),
+            Some(op),
+            StepSemantics::AtLeastOncePerRetry,
+            Arc::new(NoRetry),
+            None,
+            None,
+        )
+        .await
+        .expect("step should succeed");
+
+        assert_eq!(result, 3);
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates
+            .iter()
+            .all(|update| update.action != OperationAction::Start));
     }
 }

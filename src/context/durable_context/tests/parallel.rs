@@ -185,6 +185,32 @@ async fn test_parallel_execution_min_successful_aborts_inflight() {
 }
 
 #[tokio::test]
+async fn test_parallel_execution_panicking_branch_returns_join_error() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let branches = vec![make_parallel_branch(BranchBehavior::Panic(
+        "parallel panic",
+    ))];
+
+    let err = ctx
+        .parallel(Some("parallel"), branches, None)
+        .await
+        .expect_err("panic should surface as join error");
+
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Child task join error"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_parallel_failure_tolerance_exceeded() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

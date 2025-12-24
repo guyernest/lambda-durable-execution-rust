@@ -186,3 +186,108 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::types::{
+        DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState, Operation,
+        OperationStatus, OperationType, StepDetails,
+    };
+    use std::sync::Arc;
+
+    async fn make_execution_context_with_op(
+        op: Operation,
+    ) -> (ExecutionContext, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![
+                    Operation {
+                        id: "execution".to_string(),
+                        parent_id: None,
+                        name: None,
+                        operation_type: OperationType::Execution,
+                        sub_type: None,
+                        status: OperationStatus::Started,
+                        step_details: None,
+                        callback_details: None,
+                        wait_details: None,
+                        execution_details: Some(ExecutionDetails {
+                            input_payload: Some("{}".to_string()),
+                            output_payload: None,
+                        }),
+                        context_details: None,
+                        chained_invoke_details: None,
+                    },
+                    op,
+                ],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (exec_ctx, lambda_service)
+    }
+
+    #[tokio::test]
+    async fn test_run_wait_condition_skips_start_when_operation_exists() {
+        let step_id = "wait_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let op = Operation {
+            id: hashed_id.clone(),
+            parent_id: None,
+            name: None,
+            operation_type: OperationType::Step,
+            sub_type: Some("WaitForCondition".to_string()),
+            status: OperationStatus::Started,
+            step_details: Some(StepDetails {
+                attempt: Some(0),
+                next_attempt_timestamp: None,
+                result: None,
+                error: None,
+            }),
+            callback_details: None,
+            wait_details: None,
+            execution_details: None,
+            context_details: None,
+            chained_invoke_details: None,
+        };
+
+        let (exec_ctx, lambda_service) = make_execution_context_with_op(op).await;
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+        let ctx = Arc::new(DurableContextImpl::new(exec_ctx));
+        let config = WaitConditionConfig::new(
+            5u32,
+            Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+        );
+
+        let value = run_wait_condition(
+            ctx,
+            Some("wait"),
+            Arc::new(|state, _step_ctx| async move { Ok(state + 1) }),
+            config,
+            step_id,
+            hashed_id,
+        )
+        .await
+        .expect("wait_for_condition should succeed");
+
+        assert_eq!(value, 6);
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates
+            .iter()
+            .all(|update| update.action != OperationAction::Start));
+    }
+}

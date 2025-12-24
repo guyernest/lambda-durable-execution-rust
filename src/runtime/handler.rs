@@ -647,6 +647,48 @@ mod tests {
         assert!(err.to_string().contains("Failed to deserialize input"));
     }
 
+    #[tokio::test]
+    async fn test_handler_context_initialization_failure_returns_lambda_error() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: Some("marker".to_string()),
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect_err("context init failure should surface");
+
+        assert!(err.to_string().contains("Failed to initialize context"));
+    }
+
     #[test]
     fn test_config_debug_includes_flags() {
         let config = DurableExecutionConfig::new()

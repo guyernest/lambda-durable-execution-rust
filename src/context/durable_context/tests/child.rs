@@ -341,6 +341,39 @@ async fn test_run_in_child_context_replay_started_executes_again() {
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_replay_started_skips_start_checkpoint() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "RunInChildContext",
+        "Status": "STARTED",
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service.clone()).await;
+    let value: u32 = ctx
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(42u32) }, None)
+        .await
+        .unwrap();
+
+    assert_eq!(value, 42);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates
+        .iter()
+        .all(|update| update.action != OperationAction::Start));
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_replay_missing_payload_executes_again() {
     let arn = "arn:test:durable";
     let step_id = "child_0".to_string();
