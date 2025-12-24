@@ -3,7 +3,6 @@
 # dependencies = [
 #     "click>=8.0",
 #     "boto3>=1.35",
-#     "mermaid-cli",
 #     "tqdm>=4.66",
 # ]
 # ///
@@ -13,11 +12,9 @@ Durable execution examples validator using boto3 and Click.
 Usage:
     uv run examples/scripts/validate.py
     uv run examples/scripts/validate.py --mermaid
-    uv run examples/scripts/validate.py --mermaid --svg
-    uv run examples/scripts/validate.py --example HelloWorldExampleFunctionArn --mermaid --svg
+    uv run examples/scripts/validate.py --mermaid
+    uv run examples/scripts/validate.py --example HelloWorldExampleFunctionArn --mermaid
 
-Note: For SVG generation, you need to install Playwright browsers first:
-    playwright install chromium
 """
 from __future__ import annotations
 
@@ -482,22 +479,49 @@ def generate_mermaid_diagram(history: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_mermaid_to_svg(mermaid_file: Path, svg_file: Path) -> None:
-    """Render a Mermaid file to SVG using mermaid-cli."""
-    import contextlib
-    import io
+# -----------------------------------------------------------------------------
+# Example docstring extraction
+# -----------------------------------------------------------------------------
 
-    from mermaid_cli import render_mermaid_file_sync
 
-    # Suppress mermaid-cli's internal logging
-    with contextlib.redirect_stdout(io.StringIO()):
-        render_mermaid_file_sync(
-            input_file=str(mermaid_file),
-            output_file=str(svg_file),
-            output_format="svg",
-            background_color="white",
-            mermaid_config={"theme": "default"},
-        )
+def load_example_docstring(bin_name: str) -> tuple[str, str]:
+    """Load the top-level docstring from an example source file.
+
+    Returns (title, summary) where summary is the first paragraph after the title.
+    """
+    source_path = Path(__file__).resolve().parents[1] / "src" / "bin" / bin_name / "main.rs"
+    if not source_path.exists():
+        return (bin_name, "")
+
+    doc_lines: list[str] = []
+    for line in source_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("//!"):
+            doc_lines.append(line[3:].lstrip())
+        elif doc_lines:
+            break
+
+    # Trim leading/trailing empty lines
+    while doc_lines and not doc_lines[0].strip():
+        doc_lines.pop(0)
+    while doc_lines and not doc_lines[-1].strip():
+        doc_lines.pop()
+
+    if not doc_lines:
+        return (bin_name, "")
+
+    title = doc_lines[0].strip()
+    rest = doc_lines[1:]
+    while rest and not rest[0].strip():
+        rest.pop(0)
+
+    summary_lines: list[str] = []
+    for line in rest:
+        if not line.strip():
+            break
+        summary_lines.append(line.rstrip())
+
+    summary = "\n".join(summary_lines).strip()
+    return (title, summary)
 
 
 # -----------------------------------------------------------------------------
@@ -593,13 +617,12 @@ def run_validation(
     timeout_seconds: int,
     poll_seconds: float,
     generate_mermaid: bool,
-    generate_svg: bool,
     diagrams_dir: Path,
     example_filter: tuple[str, ...],
 ) -> int:
     """Run the validation and return exit code (0 = success, 1 = failures)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    if generate_mermaid or generate_svg:
+    if generate_mermaid:
         diagrams_dir.mkdir(parents=True, exist_ok=True)
 
     # Print header
@@ -717,14 +740,19 @@ def run_validation(
             mermaid_file = diagrams_dir / f"{spec.bin_name}.mermaid"
             mermaid_file.write_text(mermaid_content + "\n")
 
-            # Generate SVG from Mermaid if requested
-            if generate_svg:
-                click.echo(styled("      Generating SVG diagram...", dim=True))
-                svg_file = diagrams_dir / f"{spec.bin_name}.svg"
-                try:
-                    render_mermaid_to_svg(mermaid_file, svg_file)
-                except Exception as e:
-                    click.echo(styled(f"      Warning: SVG generation failed: {e}", fg="yellow"), err=True)
+            title, summary = load_example_docstring(spec.bin_name)
+            source_path = f"../src/bin/{spec.bin_name}/main.rs"
+            md_lines = [f"# {title}", ""]
+            if summary:
+                md_lines.append(summary)
+                md_lines.append("")
+            md_lines.append(f"Source: `{source_path}`")
+            md_lines.append("")
+            md_lines.append("```mermaid")
+            md_lines.append(mermaid_content)
+            md_lines.append("```")
+            md_file = diagrams_dir / f"{spec.bin_name}.md"
+            md_file.write_text("\n".join(md_lines) + "\n")
 
         transient_errors: list[str] = []
         terminal_error: str | None = None
@@ -813,11 +841,6 @@ def run_validation(
     help="Generate Mermaid flowchart diagrams",
 )
 @click.option(
-    "--svg/--no-svg",
-    default=False,
-    help="Generate SVG images from Mermaid diagrams (requires --mermaid)",
-)
-@click.option(
     "--example",
     "examples",
     multiple=True,
@@ -831,15 +854,10 @@ def main(
     timeout_seconds: int,
     poll_seconds: float,
     mermaid: bool,
-    svg: bool,
     examples: tuple[str, ...],
 ) -> None:
     """Validate durable execution examples deployed via SAM."""
     diagrams_dir = Path(diagrams_out) if diagrams_out else Path(out)
-
-    if svg and not mermaid:
-        click.echo("Warning: --svg requires --mermaid, enabling both", err=True)
-        mermaid = True
 
     exit_code = run_validation(
         region=region,
@@ -848,7 +866,6 @@ def main(
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
         generate_mermaid=mermaid,
-        generate_svg=svg,
         diagrams_dir=diagrams_dir,
         example_filter=examples,
     )
