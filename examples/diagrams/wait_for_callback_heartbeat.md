@@ -1,3 +1,12 @@
+# Wait-for-callback with heartbeat timeout example.
+
+Demonstrates:
+- `ctx.wait_for_callback()` with both a total timeout and a heartbeat timeout.
+- Suspending until the callback is completed (or times out).
+
+Source: `../src/bin/wait_for_callback_heartbeat/main.rs`
+
+```mermaid
 flowchart TD
     n_a2f1c95e_666c_3f_start([Start])
     subgraph n_4ca9bead5a86eddd["WaitForCallback"]
@@ -8,3 +17,4 @@ flowchart TD
     end
     n_a2f1c95e_666c_3f_end([Success])
     n_a2f1c95e_666c_3f_start --> n_4ca9bead5a86eddd --> n_a2f1c95e_666c_3f_end
+```

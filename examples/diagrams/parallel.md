@@ -1,3 +1,12 @@
+# Parallel fan-out (bounded concurrency) example.
+
+Demonstrates:
+- `ctx.parallel()` to run multiple branches concurrently (each branch uses durable ops).
+- `ParallelConfig::with_max_concurrency()` to bound in-flight branches.
+
+Source: `../src/bin/parallel/main.rs`
+
+```mermaid
 flowchart TD
     n_54b813bc_14b9_38_start([Start])
     subgraph n_b9ee7d87a96639b5["parallel_operation"]
@@ -18,3 +27,4 @@ flowchart TD
     end
     n_54b813bc_14b9_38_end([Success])
     n_54b813bc_14b9_38_start --> n_b9ee7d87a96639b5 --> n_54b813bc_14b9_38_end
+```

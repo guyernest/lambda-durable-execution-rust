@@ -1,3 +1,12 @@
+# Durable callback (external approval) workflow.
+
+Demonstrates:
+- `ctx.wait_for_callback()` to suspend until an external system completes a callback.
+- A “submitter” step that would normally notify a human/system with the callback id.
+
+Source: `../src/bin/callback_example/main.rs`
+
+```mermaid
 flowchart TD
     n_79e5149d_1aa1_36_start([Start])
     subgraph n_84e6db23691ed51a["wait-for-approval"]
@@ -8,3 +17,4 @@ flowchart TD
     n_6319c6143baf4582_Step_8["execute-approved-action"]
     n_79e5149d_1aa1_36_end([Success])
     n_79e5149d_1aa1_36_start --> n_84e6db23691ed51a --> n_6319c6143baf4582_Step_8 --> n_79e5149d_1aa1_36_end
+```

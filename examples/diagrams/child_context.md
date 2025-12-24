@@ -1,3 +1,12 @@
+# Child context (“scoped workflow”) example.
+
+Demonstrates:
+- `ctx.run_in_child_context()` to group a set of steps under a single parent operation.
+- A simple sequential “batch processing” loop inside a child context.
+
+Source: `../src/bin/child_context/main.rs`
+
+```mermaid
 flowchart TD
     n_fd4c6cf0_9458_38_start([Start])
     subgraph n_a2cb261984cb89d6["batch-processing-context"]
@@ -10,3 +19,4 @@ flowchart TD
     end
     n_fd4c6cf0_9458_38_end([Success])
     n_fd4c6cf0_9458_38_start --> n_a2cb261984cb89d6 --> n_fd4c6cf0_9458_38_end
+```

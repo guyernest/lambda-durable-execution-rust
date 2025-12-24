@@ -1,3 +1,12 @@
+# Parallel early-completion (“first successful”) example.
+
+Demonstrates:
+- `ctx.parallel()` with `CompletionConfig::with_min_successful(1)` to return once any branch succeeds.
+- Collecting the first successful branch result from the batch.
+
+Source: `../src/bin/parallel_first_successful/main.rs`
+
+```mermaid
 flowchart TD
     n_00b9ae21_9d5b_3a_start([Start])
     subgraph n_243d4d4bd06262c9["first_successful_parallel"]
@@ -13,3 +22,4 @@ flowchart TD
     end
     n_00b9ae21_9d5b_3a_end([Success])
     n_00b9ae21_9d5b_3a_start --> n_243d4d4bd06262c9 --> n_00b9ae21_9d5b_3a_end
+```

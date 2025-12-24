@@ -1,3 +1,12 @@
+# Map fan-out with custom Serdes example.
+
+Demonstrates:
+- Supplying an `item_serdes` to `ctx.map()` so each item result is serialized/deserialized with custom logic.
+- Returning a JSON summary of per-item processing.
+
+Source: `../src/bin/map_with_custom_serdes/main.rs`
+
+```mermaid
 flowchart TD
     n_196dd2f2_283d_3b_start([Start])
     subgraph n_0cb55f59d9c4363b["map_with_custom_serdes"]
@@ -13,3 +22,4 @@ flowchart TD
     end
     n_196dd2f2_283d_3b_end([Success])
     n_196dd2f2_283d_3b_start --> n_0cb55f59d9c4363b --> n_9a1d37f873a99c0f --> n_ac9e7eccc397aa7b --> n_59caf0641f1019b4 --> n_196dd2f2_283d_3b_end
+```

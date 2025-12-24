@@ -1,3 +1,12 @@
+# Nested child contexts (“blocks”) example.
+
+Demonstrates:
+- `ctx.run_in_child_context()` nesting and parent/child operation hierarchy.
+- Mixing steps and waits inside nested contexts.
+
+Source: `../src/bin/block_example/main.rs`
+
+```mermaid
 flowchart TD
     n_9fc00198_3291_3c_start([Start])
     subgraph n_2fc18fa04b04d421["parent_block"]
@@ -9,3 +18,4 @@ flowchart TD
     end
     n_9fc00198_3291_3c_end([Success])
     n_9fc00198_3291_3c_start --> n_2fc18fa04b04d421 --> n_9fc00198_3291_3c_end
+```

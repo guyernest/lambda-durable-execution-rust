@@ -1,3 +1,12 @@
+# Map fan-out (bounded concurrency) example.
+
+Demonstrates:
+- `ctx.map()` to process a list of items with per-item durable steps.
+- `MapConfig::with_max_concurrency()` to limit in-flight work.
+
+Source: `../src/bin/map_operations/main.rs`
+
+```mermaid
 flowchart TD
     n_0b310e0f_b458_3a_start([Start])
     subgraph n_7bdd6441b72db58d["map_operation"]
@@ -19,3 +28,4 @@ flowchart TD
     end
     n_0b310e0f_b458_3a_end([Success])
     n_0b310e0f_b458_3a_start --> n_7bdd6441b72db58d --> n_47a1a23a26aa4b33 --> n_de1e0ab9cdf321ce --> n_485143bc380459a2 --> n_6231d9a89ea147d7 --> n_23a461cac058646b --> n_0b310e0f_b458_3a_end
+```
