@@ -395,6 +395,48 @@ async fn test_wait_for_condition_execution_stop_without_payload() {
 }
 
 #[tokio::test]
+async fn test_wait_for_condition_execution_continue_without_payload() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| {
+            WaitConditionDecision::Continue {
+                delay: Duration::seconds(3),
+            }
+        }),
+    )
+    .with_serdes(Arc::new(SerializeNoneSerdes));
+
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "wait_for_condition should suspend");
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let retry_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Retry)
+        .expect("retry update");
+    assert!(retry_update.payload.is_none());
+}
+
+#[tokio::test]
 async fn test_wait_for_condition_execution_missing_step_details_uses_initial_state() {
     let arn = "arn:test:durable";
     let step_id = "wait_0".to_string();

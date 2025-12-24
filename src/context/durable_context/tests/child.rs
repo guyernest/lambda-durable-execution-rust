@@ -1,4 +1,7 @@
 use super::helpers::*;
+use async_trait::async_trait;
+use crate::error::BoxError;
+use crate::types::ChildContextConfig;
 
 #[tokio::test]
 async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
@@ -23,6 +26,55 @@ async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
     assert!(updates.iter().any(|update| {
         update.operation_type == OperationType::Context && update.action == OperationAction::Succeed
     }));
+}
+
+struct SerializeNoneSerdes;
+
+#[async_trait]
+impl Serdes<u32> for SerializeNoneSerdes {
+    async fn serialize(
+        &self,
+        _value: Option<&u32>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, BoxError> {
+        Ok(None)
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<u32>, BoxError> {
+        Ok(Some(1))
+    }
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_execution_without_payload() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = ChildContextConfig::new().with_serdes(Arc::new(SerializeNoneSerdes));
+    let value: u32 = ctx
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(4u32) }, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(value, 4u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let succeed = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Succeed)
+        .expect("succeed update");
+    assert!(succeed.payload.is_none());
 }
 
 #[tokio::test]

@@ -1,4 +1,6 @@
 use super::helpers::*;
+use async_trait::async_trait;
+use crate::error::BoxError;
 use crate::retry::{RetryDecision, RetryStrategy};
 
 #[derive(Debug)]
@@ -24,6 +26,27 @@ impl RetryStrategy for ImmediateRetry {
         _attempts_made: u32,
     ) -> RetryDecision {
         RetryDecision::retry_immediately()
+    }
+}
+
+struct SerializeNoneSerdes;
+
+#[async_trait]
+impl Serdes<u32> for SerializeNoneSerdes {
+    async fn serialize(
+        &self,
+        _value: Option<&u32>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, BoxError> {
+        Ok(None)
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<u32>, BoxError> {
+        Ok(Some(1))
     }
 }
 
@@ -88,6 +111,34 @@ async fn test_step_execution_success_checkpoints_succeed() {
         .find(|update| update.operation_type == OperationType::Step && update.action == OperationAction::Succeed)
         .expect("succeed update");
     assert_eq!(succeed.parent_id.as_deref(), Some("parent-step"));
+}
+
+#[tokio::test]
+async fn test_step_execution_success_without_payload() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::new().with_serdes(Arc::new(SerializeNoneSerdes));
+    let value: u32 = ctx
+        .step(Some("step"), |_step_ctx| async move { Ok(9u32) }, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(value, 9u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let succeed = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Succeed)
+        .expect("succeed update");
+    assert!(succeed.payload.is_none());
 }
 
 #[tokio::test]
