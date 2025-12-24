@@ -506,7 +506,7 @@ mod tests {
         });
 
         let base = "parallel";
-        let branch_names = vec![
+        let branch_names = [
             format!("{base}-branch-0"),
             format!("{base}-branch-1"),
             format!("{base}-branch-2"),
@@ -646,6 +646,9 @@ mod tests {
         .expect("batch result");
 
         assert!(result.all.is_empty());
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 }

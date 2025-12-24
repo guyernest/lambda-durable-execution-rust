@@ -1,5 +1,7 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub(super) async fn maybe_replay_map<TIn, TOut>(
     name: Option<&str>,
     items: &[TIn],

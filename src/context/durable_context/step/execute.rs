@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::retry::RetryStrategy;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_step_execution<T, F, Fut>(
     ctx: &DurableContextImpl,
     name: Option<&str>,
@@ -451,10 +452,7 @@ mod tests {
                 &ctx,
                 Some("step"),
                 |_step_ctx| async move {
-                    Err::<u32, BoxError>(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "boom",
-                    )))
+                    Err::<u32, BoxError>(Box::new(std::io::Error::other("boom")))
                 },
                 step_id.clone(),
                 hashed_id.clone(),
@@ -481,7 +479,9 @@ mod tests {
             .into_iter()
             .flat_map(|call| call.updates)
             .collect();
-        assert!(updates.iter().any(|update| update.action == OperationAction::Retry));
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Retry));
     }
 
     #[tokio::test]
@@ -498,12 +498,7 @@ mod tests {
         let err = run_step_execution(
             &ctx,
             Some("step"),
-            |_step_ctx| async move {
-                Err::<u32, BoxError>(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "boom",
-                )))
-            },
+            |_step_ctx| async move { Err::<u32, BoxError>(Box::new(std::io::Error::other("boom"))) },
             step_id.clone(),
             hashed_id.clone(),
             None,
@@ -528,6 +523,8 @@ mod tests {
             .into_iter()
             .flat_map(|call| call.updates)
             .collect();
-        assert!(updates.iter().any(|update| update.action == OperationAction::Fail));
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Fail));
     }
 }

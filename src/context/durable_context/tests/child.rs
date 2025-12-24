@@ -275,7 +275,10 @@ async fn test_run_in_child_context_execution_serialize_failure_terminates() {
     )
     .await;
 
-    assert!(result.is_err(), "child context should suspend on serdes failure");
+    assert!(
+        result.is_err(),
+        "child context should suspend on serdes failure"
+    );
 
     let termination = ctx
         .execution_context()

@@ -193,7 +193,7 @@ async fn test_step_execution_failure_no_retry_checkpoints_fail() {
             Some("step"),
             |_step_ctx| async move {
                 Err(Box::<dyn std::error::Error + Send + Sync>::from(
-                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                    std::io::Error::other("boom"),
                 ))
             },
             Some(config),
@@ -239,7 +239,7 @@ async fn test_step_execution_failure_without_name() {
             None,
             |_step_ctx| async move {
                 Err(Box::<dyn std::error::Error + Send + Sync>::from(
-                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                    std::io::Error::other("boom"),
                 ))
             },
             Some(config),
@@ -287,7 +287,7 @@ async fn test_step_execution_retry_suspends_and_checkpoints() {
             Some("step"),
             |_step_ctx| async move {
                 Err(Box::<dyn std::error::Error + Send + Sync>::from(
-                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                    std::io::Error::other("boom"),
                 ))
             },
             Some(config),
@@ -339,7 +339,7 @@ async fn test_step_execution_retry_without_name() {
             None,
             |_step_ctx| async move {
                 Err(Box::<dyn std::error::Error + Send + Sync>::from(
-                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                    std::io::Error::other("boom"),
                 ))
             },
             Some(config),
@@ -376,7 +376,7 @@ async fn test_step_execution_retry_uses_default_delay() {
             Some("step"),
             |_step_ctx| async move {
                 Err(Box::<dyn std::error::Error + Send + Sync>::from(
-                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                    std::io::Error::other("boom"),
                 ))
             },
             Some(config),

@@ -349,8 +349,10 @@ mod tests {
         let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
         let input = input_with_payload(Some(input_payload));
 
-        let mut fail = MockCheckpointConfig::default();
-        fail.error = Some(DurableError::Internal("checkpoint failed".to_string()));
+        let fail = MockCheckpointConfig {
+            error: Some(DurableError::Internal("checkpoint failed".to_string())),
+            ..Default::default()
+        };
 
         let mock = Arc::new(MockLambdaService::new());
         mock.expect_checkpoint(fail);

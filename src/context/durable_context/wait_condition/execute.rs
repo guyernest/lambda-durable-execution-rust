@@ -360,7 +360,9 @@ mod tests {
             .into_iter()
             .flat_map(|call| call.updates)
             .collect();
-        assert!(updates.iter().any(|update| update.action == OperationAction::Start));
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Start));
         assert!(updates
             .iter()
             .any(|update| update.action == OperationAction::Succeed));
@@ -379,11 +381,11 @@ mod tests {
         let ctx = Arc::new(DurableContextImpl::new(exec_ctx));
         let config = WaitConditionConfig::new(
             1u32,
-            Arc::new(|_state: &u32, _attempt: u32| {
-                WaitConditionDecision::Continue {
+            Arc::new(
+                |_state: &u32, _attempt: u32| WaitConditionDecision::Continue {
                     delay: Duration::seconds(3),
-                }
-            }),
+                },
+            ),
         );
 
         let result = tokio::time::timeout(
@@ -413,7 +415,9 @@ mod tests {
             .into_iter()
             .flat_map(|call| call.updates)
             .collect();
-        assert!(updates.iter().any(|update| update.action == OperationAction::Retry));
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Retry));
     }
 
     #[tokio::test]
@@ -473,6 +477,8 @@ mod tests {
             .into_iter()
             .flat_map(|call| call.updates)
             .collect();
-        assert!(updates.iter().any(|update| update.action == OperationAction::Fail));
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Fail));
     }
 }

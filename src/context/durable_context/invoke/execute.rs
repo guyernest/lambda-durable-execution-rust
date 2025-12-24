@@ -1,5 +1,6 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_invoke_execution<I, O>(
     ctx: &DurableContextImpl,
     name: Option<&str>,

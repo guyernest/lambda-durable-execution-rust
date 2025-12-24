@@ -1,5 +1,7 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub(super) async fn run_map_execution<TIn, TOut, F, Fut>(
     inner: Arc<DurableContextImpl>,
     name: Option<&str>,
@@ -263,8 +265,8 @@ mod tests {
     use crate::error::BoxError;
     use crate::mock::{MockCheckpointConfig, MockLambdaService};
     use crate::types::{
-        CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState,
-        Operation, OperationStatus, OperationType, SerdesContext,
+        BatchCompletionReason, CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails,
+        InitialExecutionState, Operation, OperationStatus, OperationType, SerdesContext,
     };
     use async_trait::async_trait;
     use serde_json::json;
@@ -332,9 +334,11 @@ mod tests {
         let map_step_id = "map_0".to_string();
         let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
         let cfg = MapConfig::<u32, u32>::new();
-        let map_fn = Arc::new(|_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
-            Ok::<u32, DurableError>(0)
-        });
+        let map_fn = Arc::new(
+            |_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+                Ok::<u32, DurableError>(0)
+            },
+        );
 
         let result = run_map_execution(
             inner,
@@ -352,7 +356,10 @@ mod tests {
         .expect("map should succeed");
 
         assert!(result.all.is_empty());
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 
     #[tokio::test]
@@ -363,9 +370,11 @@ mod tests {
         let map_step_id = "map_0".to_string();
         let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
         let cfg = MapConfig::<u32, u32>::new().with_serdes(Arc::new(BatchSerdes));
-        let map_fn = Arc::new(|_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
-            Ok::<u32, DurableError>(0)
-        });
+        let map_fn = Arc::new(
+            |_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+                Ok::<u32, DurableError>(0)
+            },
+        );
 
         let result = run_map_execution(
             inner,
@@ -383,7 +392,10 @@ mod tests {
         .expect("map should succeed");
 
         assert!(result.all.is_empty());
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 
     #[tokio::test]
@@ -399,13 +411,15 @@ mod tests {
             .with_max_concurrency(4)
             .with_completion_config(CompletionConfig::new().with_tolerated_failures(1));
 
-        let map_fn = Arc::new(|item: u32, _ctx: DurableContextHandle, idx: usize| async move {
-            if idx == 0 {
-                Ok::<u32, DurableError>(item + 1)
-            } else {
-                Err(DurableError::Internal("boom".to_string()))
-            }
-        });
+        let map_fn = Arc::new(
+            |item: u32, _ctx: DurableContextHandle, idx: usize| async move {
+                if idx == 0 {
+                    Ok::<u32, DurableError>(item + 1)
+                } else {
+                    Err(DurableError::Internal("boom".to_string()))
+                }
+            },
+        );
 
         let result = run_map_execution(
             inner,
@@ -424,7 +438,10 @@ mod tests {
 
         assert_eq!(result.success_count(), 1);
         assert_eq!(result.failure_count(), 1);
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 
     #[tokio::test]
@@ -438,9 +455,11 @@ mod tests {
         let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
         let cfg = MapConfig::new().with_serdes(Arc::new(BatchSerdes));
 
-        let map_fn = Arc::new(|item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
-            Ok::<u32, DurableError>(item + 1)
-        });
+        let map_fn = Arc::new(
+            |item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+                Ok::<u32, DurableError>(item + 1)
+            },
+        );
 
         let result = run_map_execution(
             inner,

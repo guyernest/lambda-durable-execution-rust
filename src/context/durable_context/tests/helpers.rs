@@ -138,7 +138,7 @@ impl Serdes<u32> for SerializeFailSerdes {
         _context: SerdesContext,
     ) -> Result<Option<String>, crate::error::BoxError> {
         Err(Box::<dyn std::error::Error + Send + Sync>::from(
-            std::io::Error::new(std::io::ErrorKind::Other, "serialize failed"),
+            std::io::Error::other("serialize failed"),
         ))
     }
 
@@ -169,7 +169,7 @@ impl Serdes<u32> for DeserializeFailSerdes {
         _context: SerdesContext,
     ) -> Result<Option<u32>, crate::error::BoxError> {
         Err(Box::<dyn std::error::Error + Send + Sync>::from(
-            std::io::Error::new(std::io::ErrorKind::Other, "deserialize failed"),
+            std::io::Error::other("deserialize failed"),
         ))
     }
 }
@@ -205,7 +205,7 @@ impl Serdes<BatchResult<u32>> for BatchSerializeFailSerdes {
         _context: SerdesContext,
     ) -> Result<Option<String>, crate::error::BoxError> {
         Err(Box::<dyn std::error::Error + Send + Sync>::from(
-            std::io::Error::new(std::io::ErrorKind::Other, "serialize failed"),
+            std::io::Error::other("serialize failed"),
         ))
     }
 
@@ -239,7 +239,7 @@ impl Serdes<BatchResult<u32>> for BatchDeserializeFailSerdes {
         _context: SerdesContext,
     ) -> Result<Option<BatchResult<u32>>, crate::error::BoxError> {
         Err(Box::<dyn std::error::Error + Send + Sync>::from(
-            std::io::Error::new(std::io::ErrorKind::Other, "deserialize failed"),
+            std::io::Error::other("deserialize failed"),
         ))
     }
 }

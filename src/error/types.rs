@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_error_object_from_error_includes_source() {
-        let inner = std::io::Error::new(std::io::ErrorKind::Other, "inner");
+        let inner = std::io::Error::other("inner");
         let err = OuterError {
             message: "outer",
             source: Some(Box::new(inner)),

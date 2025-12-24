@@ -1,5 +1,6 @@
 use super::super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_parallel_execution<T, F, Fut>(
     inner: Arc<DurableContextImpl>,
     name: Option<&str>,
@@ -285,8 +286,9 @@ mod tests {
     use crate::error::{DurableError, DurableResult};
     use crate::mock::{MockCheckpointConfig, MockLambdaService};
     use crate::types::{
-        CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState,
-        NamedParallelBranch, Operation, OperationStatus, OperationType, ParallelConfig,
+        BatchCompletionReason, CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails,
+        InitialExecutionState, NamedParallelBranch, Operation, OperationStatus, OperationType,
+        ParallelConfig,
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -349,7 +351,10 @@ mod tests {
         .expect("parallel should succeed");
 
         assert!(result.all.is_empty());
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 
     #[tokio::test]
@@ -392,6 +397,9 @@ mod tests {
 
         assert_eq!(result.success_count(), 1);
         assert_eq!(result.failure_count(), 1);
-        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+        assert_eq!(
+            result.completion_reason,
+            BatchCompletionReason::AllCompleted
+        );
     }
 }

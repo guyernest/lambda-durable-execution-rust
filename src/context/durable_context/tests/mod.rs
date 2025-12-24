@@ -1,6 +1,6 @@
 use self::helpers::make_execution_context;
 use super::*;
-use crate::types::CompletionConfig;
+use crate::types::{BatchCompletionReason, CompletionConfig};
 
 mod callback;
 mod child;

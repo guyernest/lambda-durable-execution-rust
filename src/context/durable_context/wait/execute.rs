@@ -162,15 +162,9 @@ mod tests {
         let (exec_ctx, _lambda_service) = make_execution_context_with_ops(vec![op]).await;
         let ctx = DurableContextImpl::new(exec_ctx);
 
-        let err = run_wait(
-            &ctx,
-            Some("wait"),
-            Duration::seconds(5),
-            step_id,
-            hashed_id,
-        )
-        .await
-        .expect_err("wait should fail in replay");
+        let err = run_wait(&ctx, Some("wait"), Duration::seconds(5), step_id, hashed_id)
+            .await
+            .expect_err("wait should fail in replay");
 
         assert!(err.to_string().contains("Wait failed in replay"));
     }
@@ -197,15 +191,9 @@ mod tests {
         let (exec_ctx, _lambda_service) = make_execution_context_with_ops(vec![op]).await;
         let ctx = DurableContextImpl::new(exec_ctx);
 
-        run_wait(
-            &ctx,
-            Some("wait"),
-            Duration::seconds(5),
-            step_id,
-            hashed_id,
-        )
-        .await
-        .expect("wait should return ok when already succeeded");
+        run_wait(&ctx, Some("wait"), Duration::seconds(5), step_id, hashed_id)
+            .await
+            .expect("wait should return ok when already succeeded");
     }
 
     #[tokio::test]
@@ -232,13 +220,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            run_wait(
-                &ctx,
-                Some("wait"),
-                Duration::seconds(5),
-                step_id,
-                hashed_id,
-            ),
+            run_wait(&ctx, Some("wait"), Duration::seconds(5), step_id, hashed_id),
         )
         .await;
 

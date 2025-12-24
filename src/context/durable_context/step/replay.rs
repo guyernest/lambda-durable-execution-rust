@@ -2,6 +2,7 @@ use super::super::*;
 use super::StepInterruptedError;
 use crate::retry::RetryStrategy;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_replay<T>(
     operation: Option<&crate::types::Operation>,
     step_id: &str,
