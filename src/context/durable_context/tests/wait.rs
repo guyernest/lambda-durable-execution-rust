@@ -39,6 +39,36 @@ async fn test_wait_execution_suspends_after_checkpoint() {
 }
 
 #[tokio::test]
+async fn test_wait_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-wait".to_string()))
+        .await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait(Some("wait"), Duration::seconds(1)),
+    )
+    .await;
+    assert!(result.is_err(), "wait should suspend");
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|u| u.operation_type == OperationType::Wait)
+        .expect("wait update");
+    assert_eq!(update.parent_id.as_deref(), Some("parent-wait"));
+}
+
+#[tokio::test]
 async fn test_wait_replay_failed_returns_error() {
     let arn = "arn:test:durable";
     let step_id = "wait_0".to_string();

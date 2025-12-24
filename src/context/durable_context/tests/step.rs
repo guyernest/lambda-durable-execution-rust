@@ -118,6 +118,10 @@ async fn test_step_execution_retry_suspends_and_checkpoints() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
 
+    ctx.execution_context()
+        .set_parent_id(Some("parent-step".to_string()))
+        .await;
+
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 
@@ -160,11 +164,41 @@ async fn test_step_execution_retry_suspends_and_checkpoints() {
         .find(|update| update.operation_type == OperationType::Step)
         .expect("retry update");
     assert_eq!(retry_update.action, OperationAction::Retry);
+    assert_eq!(retry_update.parent_id.as_deref(), Some("parent-step"));
     let options = retry_update
         .step_options
         .as_ref()
         .expect("step options");
     assert_eq!(options.next_attempt_delay_seconds, Some(5));
+}
+
+#[tokio::test]
+async fn test_step_execution_at_most_once_checkpoints_start() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config: StepConfig<u32> = StepConfig::new()
+        .with_semantics(StepSemantics::AtMostOncePerRetry)
+        .with_retry_strategy(Arc::new(NoRetry));
+
+    let value: u32 = ctx
+        .step(Some("step"), |_step_ctx| async move { Ok(5u32) }, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(value, 5u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step && update.action == OperationAction::Start
+    }));
 }
 
 #[tokio::test]

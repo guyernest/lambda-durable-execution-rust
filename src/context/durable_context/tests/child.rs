@@ -26,6 +26,37 @@ async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-context".to_string()))
+        .await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let value: u32 = ctx
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(3u32) }, None)
+        .await
+        .unwrap();
+
+    assert_eq!(value, 3u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let start = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Start)
+        .expect("start update");
+    assert_eq!(start.parent_id.as_deref(), Some("parent-context"));
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
@@ -184,6 +215,34 @@ async fn test_run_in_child_context_replay_started_executes_again() {
         .unwrap();
 
     assert_eq!(value, 11u32);
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_replay_missing_payload_executes_again() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "SUCCEEDED",
+        "ContextDetails": {},
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service.clone()).await;
+    let value: u32 = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(21u32) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 21u32);
 }
 
 #[tokio::test]

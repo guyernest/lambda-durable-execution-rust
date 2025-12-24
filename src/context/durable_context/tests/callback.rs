@@ -241,3 +241,33 @@ async fn test_callback_handle_wait_raw_replay_failed_returns_error() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_callback_handle_wait_raw_replay_missing_result_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let err = handle
+        .wait_raw()
+        .await
+        .expect_err("callback raw should fail without result");
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing callback result"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

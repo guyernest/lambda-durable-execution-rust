@@ -1,4 +1,27 @@
 use super::helpers::*;
+use async_trait::async_trait;
+use crate::error::BoxError;
+
+struct SerializeNoneSerdes;
+
+#[async_trait]
+impl Serdes<u32> for SerializeNoneSerdes {
+    async fn serialize(
+        &self,
+        _value: Option<&u32>,
+        _context: SerdesContext,
+    ) -> Result<Option<String>, BoxError> {
+        Ok(None)
+    }
+
+    async fn deserialize(
+        &self,
+        _data: Option<&str>,
+        _context: SerdesContext,
+    ) -> Result<Option<u32>, BoxError> {
+        Ok(Some(10))
+    }
+}
 
 #[tokio::test]
 async fn test_wait_for_condition_replay_success_returns_result() {
@@ -198,6 +221,10 @@ async fn test_wait_for_condition_execution_continue_retries() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
 
+    ctx.execution_context()
+        .set_parent_id(Some("parent-wait".to_string()))
+        .await;
+
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 
@@ -233,6 +260,12 @@ async fn test_wait_for_condition_execution_continue_retries() {
         .into_iter()
         .flat_map(|call| call.updates)
         .collect();
+    let start_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Start)
+        .expect("start update");
+    assert_eq!(start_update.parent_id.as_deref(), Some("parent-wait"));
+
     let retry_update = updates
         .iter()
         .find(|update| update.action == OperationAction::Retry)
@@ -286,4 +319,77 @@ async fn test_wait_for_condition_execution_max_attempts_exceeded() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_uses_replayed_state() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&5u32).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 0, "Result": payload },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+
+    let value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 6u32);
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_stop_without_payload() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    )
+    .with_serdes(Arc::new(SerializeNoneSerdes));
+
+    let value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 1u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let succeed_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Succeed)
+        .expect("succeed update");
+    assert!(succeed_update.payload.is_none());
 }
