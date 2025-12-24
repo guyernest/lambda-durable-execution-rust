@@ -225,6 +225,12 @@ pub mod runtime;
 pub mod termination;
 pub mod types;
 
+// Include README.md in doctests so its Rust snippets stay in sync.
+#[cfg(doctest)]
+mod readme_doctest {
+    #![doc = include_str!("../README.md")]
+}
+
 /// Test utilities and mocks (requires the `testutils` feature or test builds).
 #[cfg(any(test, feature = "testutils"))]
 pub mod mock {
