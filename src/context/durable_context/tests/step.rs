@@ -1,7 +1,7 @@
 use super::helpers::*;
-use async_trait::async_trait;
 use crate::error::BoxError;
 use crate::retry::{RetryDecision, RetryStrategy};
+use async_trait::async_trait;
 
 #[derive(Debug)]
 struct AlwaysRetry;
@@ -108,7 +108,10 @@ async fn test_step_execution_success_checkpoints_succeed() {
         .collect();
     let succeed = updates
         .iter()
-        .find(|update| update.operation_type == OperationType::Step && update.action == OperationAction::Succeed)
+        .find(|update| {
+            update.operation_type == OperationType::Step
+                && update.action == OperationAction::Succeed
+        })
         .expect("succeed update");
     assert_eq!(succeed.parent_id.as_deref(), Some("parent-step"));
 }
@@ -123,7 +126,11 @@ async fn test_step_execution_success_without_payload() {
 
     let config = StepConfig::new().with_serdes(Arc::new(SerializeNoneSerdes));
     let value: u32 = ctx
-        .step(Some("step"), |_step_ctx| async move { Ok(9u32) }, Some(config))
+        .step(
+            Some("step"),
+            |_step_ctx| async move { Ok(9u32) },
+            Some(config),
+        )
         .await
         .unwrap();
 
@@ -139,6 +146,33 @@ async fn test_step_execution_success_without_payload() {
         .find(|update| update.action == OperationAction::Succeed)
         .expect("succeed update");
     assert!(succeed.payload.is_none());
+}
+
+#[tokio::test]
+async fn test_step_execution_success_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let value: u32 = ctx
+        .step(
+            None,
+            |_step_ctx| async move { Ok(7u32) },
+            None::<StepConfig<u32>>,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 7u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().all(|update| update.name.is_none()));
 }
 
 #[tokio::test]
@@ -184,9 +218,54 @@ async fn test_step_execution_failure_no_retry_checkpoints_fail() {
         .collect();
     let fail = updates
         .iter()
-        .find(|update| update.operation_type == OperationType::Step && update.action == OperationAction::Fail)
+        .find(|update| {
+            update.operation_type == OperationType::Step && update.action == OperationAction::Fail
+        })
         .expect("fail update");
     assert_eq!(fail.parent_id.as_deref(), Some("parent-step"));
+}
+
+#[tokio::test]
+async fn test_step_execution_failure_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::<u32>::new().with_retry_strategy(Arc::new(NoRetry));
+    let err = ctx
+        .step(
+            None,
+            |_step_ctx| async move {
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                ))
+            },
+            Some(config),
+        )
+        .await
+        .expect_err("step should fail without retry");
+
+    match err {
+        DurableError::StepFailed { message, .. } => {
+            assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let fail = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Step && update.action == OperationAction::Fail
+        })
+        .expect("fail update");
+    assert!(fail.name.is_none());
 }
 
 #[tokio::test]
@@ -241,11 +320,45 @@ async fn test_step_execution_retry_suspends_and_checkpoints() {
         .expect("retry update");
     assert_eq!(retry_update.action, OperationAction::Retry);
     assert_eq!(retry_update.parent_id.as_deref(), Some("parent-step"));
-    let options = retry_update
-        .step_options
-        .as_ref()
-        .expect("step options");
+    let options = retry_update.step_options.as_ref().expect("step options");
     assert_eq!(options.next_attempt_delay_seconds, Some(5));
+}
+
+#[tokio::test]
+async fn test_step_execution_retry_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::<u32>::new().with_retry_strategy(Arc::new(AlwaysRetry));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(
+            None,
+            |_step_ctx| async move {
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                ))
+            },
+            Some(config),
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend for retry");
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let retry_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Retry)
+        .expect("retry update");
+    assert!(retry_update.name.is_none());
 }
 
 #[tokio::test]
@@ -282,10 +395,7 @@ async fn test_step_execution_retry_uses_default_delay() {
         .iter()
         .find(|update| update.action == OperationAction::Retry)
         .expect("retry update");
-    let options = retry_update
-        .step_options
-        .as_ref()
-        .expect("step options");
+    let options = retry_update.step_options.as_ref().expect("step options");
     assert_eq!(options.next_attempt_delay_seconds, Some(1));
 }
 
@@ -302,7 +412,11 @@ async fn test_step_execution_at_most_once_checkpoints_start() {
         .with_retry_strategy(Arc::new(NoRetry));
 
     let value: u32 = ctx
-        .step(Some("step"), |_step_ctx| async move { Ok(5u32) }, Some(config))
+        .step(
+            Some("step"),
+            |_step_ctx| async move { Ok(5u32) },
+            Some(config),
+        )
         .await
         .unwrap();
 

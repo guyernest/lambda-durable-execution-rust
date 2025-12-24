@@ -231,13 +231,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::error::BoxError;
     use crate::mock::MockLambdaService;
     use crate::types::{
         DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState, Operation,
         OperationStatus, OperationType,
     };
+    use async_trait::async_trait;
     use std::sync::Arc;
 
     struct NoneSerdes;
@@ -270,7 +270,9 @@ mod tests {
             _value: Option<&u32>,
             _context: SerdesContext,
         ) -> Result<Option<String>, BoxError> {
-            Err(Box::<dyn std::error::Error + Send + Sync>::from("serialize boom"))
+            Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                "serialize boom",
+            ))
         }
 
         async fn deserialize(
@@ -278,7 +280,9 @@ mod tests {
             _data: Option<&str>,
             _context: SerdesContext,
         ) -> Result<Option<u32>, BoxError> {
-            Err(Box::<dyn std::error::Error + Send + Sync>::from("deserialize boom"))
+            Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                "deserialize boom",
+            ))
         }
     }
 
@@ -324,7 +328,8 @@ mod tests {
     #[tokio::test]
     async fn test_safe_serialize_custom_none_returns_none() {
         let ctx = make_execution_context().await;
-        let payload = safe_serialize(Some(Arc::new(NoneSerdes)), Some(&1u32), "id", None, &ctx).await;
+        let payload =
+            safe_serialize(Some(Arc::new(NoneSerdes)), Some(&1u32), "id", None, &ctx).await;
         assert!(payload.is_none());
     }
 
@@ -349,7 +354,10 @@ mod tests {
             .termination_manager
             .get_termination_result()
             .expect("termination should be recorded");
-        assert_eq!(termination.reason, crate::termination::TerminationReason::SerdesFailed);
+        assert_eq!(
+            termination.reason,
+            crate::termination::TerminationReason::SerdesFailed
+        );
     }
 
     #[tokio::test]
@@ -360,7 +368,10 @@ mod tests {
             safe_serialize_required_with_serdes(Arc::new(NoneSerdes), &1u32, "id", None, &ctx),
         )
         .await;
-        assert!(result.is_err(), "safe_serialize_required should suspend on none");
+        assert!(
+            result.is_err(),
+            "safe_serialize_required should suspend on none"
+        );
     }
 
     #[tokio::test]
@@ -371,6 +382,9 @@ mod tests {
             safe_deserialize_required_with_serdes(Arc::new(NoneSerdes), "1", "id", None, &ctx),
         )
         .await;
-        assert!(result.is_err(), "safe_deserialize_required should suspend on none");
+        assert!(
+            result.is_err(),
+            "safe_deserialize_required should suspend on none"
+        );
     }
 }

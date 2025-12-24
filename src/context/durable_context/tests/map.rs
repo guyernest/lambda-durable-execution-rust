@@ -431,7 +431,10 @@ async fn test_map_replay_batch_serdes_returns_batch() {
         completion_reason: BatchCompletionReason::AllCompleted,
     };
 
-    let cfg = MapConfig::new().with_serdes(Arc::new(batch_serdes));
+    let item_namer = Arc::new(|item: &u32, idx: usize| format!("item-{item}-{idx}"));
+    let cfg = MapConfig::new()
+        .with_serdes(Arc::new(batch_serdes))
+        .with_item_namer(item_namer);
 
     let ctx = make_replay_context(arn, vec![op]).await;
     let batch: BatchResult<String> = ctx
@@ -450,4 +453,240 @@ async fn test_map_replay_batch_serdes_returns_batch() {
 
     assert_eq!(batch.success_count(), 2);
     assert_eq!(batch.values(), vec!["a".to_string(), "b".to_string()]);
+}
+
+#[tokio::test]
+async fn test_map_empty_items_without_batch_serdes() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            Vec::<u32>::new(),
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run for empty items");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+}
+
+#[tokio::test]
+async fn test_map_execution_with_item_namer_and_batch_serdes() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..6 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let item_namer = Arc::new(|item: &u32, idx: usize| format!("item-{item}-{idx}"));
+    let batch_serdes = StaticBatchSerdes::<u32> {
+        items: Vec::new(),
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+    let config = MapConfig::new()
+        .with_item_namer(item_namer)
+        .with_serdes(Arc::new(batch_serdes))
+        .with_max_concurrency(1);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item + 1) },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+    assert_eq!(batch.values(), vec![2u32, 3u32]);
+}
+
+#[tokio::test]
+async fn test_map_execution_min_successful_aborts_inflight() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..6 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_min_successful(1);
+    let config = MapConfig::new()
+        .with_max_concurrency(2)
+        .with_completion_config(completion);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |item, _child_ctx, idx| async move {
+                if idx == 1 {
+                    tokio::time::sleep(StdDuration::from_millis(50)).await;
+                }
+                Ok::<u32, DurableError>(item)
+            },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::MinSuccessfulReached
+    );
+    assert_eq!(batch.succeeded().len(), 1);
+    assert_eq!(batch.started().len(), 1);
+}
+
+#[tokio::test]
+async fn test_map_replay_includes_failed_and_started_children() {
+    let arn = "arn:test:durable";
+    let name = Some("map");
+
+    let map_step_id = "map_0".to_string();
+    let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+    let summary = json!({
+        "totalCount": 3,
+        "successCount": 1,
+        "failureCount": 1,
+    })
+    .to_string();
+
+    let map_op = json!({
+        "Id": map_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary },
+    });
+
+    let item0_name = "map-item-0".to_string();
+    let child0_step_id = format!("{}_{}", item0_name, 1);
+    let child0_hashed_id = CheckpointManager::hash_id(&child0_step_id);
+    let child0_result = serde_json::to_string(&10u32).unwrap();
+    let child0_op = json!({
+        "Id": child0_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": child0_result },
+    });
+
+    let item1_name = "map-item-1".to_string();
+    let child1_step_id = format!("{}_{}", item1_name, 2);
+    let child1_hashed_id = CheckpointManager::hash_id(&child1_step_id);
+    let child1_op = json!({
+        "Id": child1_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "FAILED",
+        "ContextDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "child boom" }
+        },
+    });
+
+    let item2_name = "map-item-2".to_string();
+    let child2_step_id = format!("{}_{}", item2_name, 3);
+    let child2_hashed_id = CheckpointManager::hash_id(&child2_step_id);
+    let child2_op = json!({
+        "Id": child2_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "STARTED",
+    });
+
+    let ctx = make_replay_context(arn, vec![map_op, child0_op, child1_op, child2_op]).await;
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            name,
+            vec![1u32, 2u32, 3u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.succeeded().len(), 1);
+    assert_eq!(batch.failed().len(), 1);
+    assert_eq!(batch.started().len(), 1);
+    let err = batch.first_error().expect("failed item");
+    assert!(err.to_string().contains("child boom"));
+}
+
+#[tokio::test]
+async fn test_map_replay_missing_op_executes_empty_map() {
+    let arn = "arn:test:durable";
+    let lambda_service = Arc::new(MockLambdaService::new());
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let ctx = make_replay_context_with_service(arn, vec![], lambda_service).await;
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            Vec::<u32>::new(),
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run for empty items");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+}
+
+#[tokio::test]
+async fn test_map_replay_started_op_executes() {
+    let arn = "arn:test:durable";
+    let map_step_id = "map_0".to_string();
+    let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+    let map_op = json!({
+        "Id": map_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "STARTED",
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let ctx = make_replay_context_with_service(arn, vec![map_op], lambda_service).await;
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
 }

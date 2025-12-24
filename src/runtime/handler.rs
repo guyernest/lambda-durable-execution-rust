@@ -316,6 +316,7 @@ mod tests {
     use super::*;
     use crate::error::DurableError;
     use crate::mock::MockLambdaService;
+    use crate::termination::TerminationReason;
     use crate::types::{
         ExecutionDetails, InitialExecutionState, InvocationStatus, Operation, OperationStatus,
     };
@@ -725,11 +726,10 @@ mod tests {
             },
         };
 
-        let handler_fn = durable_handler(|_event: serde_json::Value, _ctx| async {
-            Ok(json!({"ok": true}))
-        })
-        .with_lambda_service(Arc::new(MockLambdaService::new()))
-        .build();
+        let handler_fn =
+            durable_handler(|_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) })
+                .with_lambda_service(Arc::new(MockLambdaService::new()))
+                .build();
 
         let output = handler_fn(input).await.expect("handler should succeed");
         assert_eq!(output.status, InvocationStatus::Succeeded);
@@ -743,10 +743,9 @@ mod tests {
             .build();
         let client = aws_sdk_lambda::Client::from_conf(sdk_config);
 
-        let _handler = durable_handler(|_event: serde_json::Value, _ctx| async {
-            Ok(json!({"ok": true}))
-        })
-        .with_lambda_client(Arc::new(client));
+        let _handler =
+            durable_handler(|_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) })
+                .with_lambda_client(Arc::new(client));
     }
 
     #[tokio::test]
@@ -900,5 +899,156 @@ mod tests {
         let err = output.error.expect("error object");
         assert_eq!(err.error_type, "ContextValidationError");
         assert!(err.error_message.contains("bad"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_termination_wait_returns_pending() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate_for_wait()
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect("wait termination should return pending");
+
+        assert_eq!(output.status, InvocationStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_handler_termination_context_validation_with_non_context_error() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate(crate::termination::TerminationResult::with_error(
+                        TerminationReason::ContextValidationError,
+                        DurableError::Internal("unexpected".to_string()),
+                    ))
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect("context validation should map to failed output");
+
+        assert_eq!(output.status, InvocationStatus::Failed);
+        let err = output.error.expect("error object");
+        assert!(err.error_message.contains("unexpected"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_termination_checkpoint_failed_without_message_defaults() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate(crate::termination::TerminationResult::new(
+                        TerminationReason::CheckpointFailed,
+                    ))
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect_err("checkpoint failure should surface");
+
+        assert!(err.to_string().contains("Checkpoint failed"));
     }
 }

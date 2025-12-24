@@ -1,5 +1,5 @@
-use super::*;
 use self::helpers::make_execution_context;
+use super::*;
 use crate::types::CompletionConfig;
 
 mod callback;

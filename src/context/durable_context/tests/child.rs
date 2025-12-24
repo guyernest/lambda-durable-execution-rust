@@ -1,7 +1,7 @@
 use super::helpers::*;
-use async_trait::async_trait;
 use crate::error::BoxError;
 use crate::types::ChildContextConfig;
+use async_trait::async_trait;
 
 #[tokio::test]
 async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
@@ -26,6 +26,29 @@ async fn test_run_in_child_context_execution_success_checkpoints_succeed() {
     assert!(updates.iter().any(|update| {
         update.operation_type == OperationType::Context && update.action == OperationAction::Succeed
     }));
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_execution_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let value: u32 = ctx
+        .run_in_child_context(None, |_child_ctx| async move { Ok(11u32) }, None)
+        .await
+        .unwrap();
+
+    assert_eq!(value, 11u32);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().all(|update| update.name.is_none()));
 }
 
 struct SerializeNoneSerdes;
@@ -59,7 +82,11 @@ async fn test_run_in_child_context_execution_without_payload() {
 
     let config = ChildContextConfig::new().with_serdes(Arc::new(SerializeNoneSerdes));
     let value: u32 = ctx
-        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(4u32) }, Some(config))
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(4u32) },
+            Some(config),
+        )
         .await
         .unwrap();
 
@@ -144,7 +171,8 @@ async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
     let fail = updates
         .iter()
         .find(|update| {
-            update.operation_type == OperationType::Context && update.action == OperationAction::Fail
+            update.operation_type == OperationType::Context
+                && update.action == OperationAction::Fail
         })
         .expect("fail update");
     assert_eq!(fail.parent_id.as_deref(), Some("parent-context"));
@@ -266,11 +294,7 @@ async fn test_run_in_child_context_replay_started_executes_again() {
 
     let ctx = make_replay_context_with_service(arn, vec![op], lambda_service.clone()).await;
     let value: u32 = ctx
-        .run_in_child_context(
-            Some("child"),
-            |_child_ctx| async move { Ok(11u32) },
-            None,
-        )
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(11u32) }, None)
         .await
         .unwrap();
 
@@ -294,11 +318,7 @@ async fn test_run_in_child_context_replay_missing_payload_executes_again() {
 
     let ctx = make_replay_context_with_service(arn, vec![op], lambda_service.clone()).await;
     let value: u32 = ctx
-        .run_in_child_context(
-            Some("child"),
-            |_child_ctx| async move { Ok(21u32) },
-            None,
-        )
+        .run_in_child_context(Some("child"), |_child_ctx| async move { Ok(21u32) }, None)
         .await
         .unwrap();
 

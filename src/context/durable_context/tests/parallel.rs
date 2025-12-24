@@ -1,4 +1,5 @@
 use super::helpers::*;
+use crate::types::NamedParallelBranch;
 
 #[tokio::test]
 async fn test_parallel_replay_failed_returns_error() {
@@ -36,6 +37,38 @@ async fn test_parallel_replay_failed_returns_error() {
 }
 
 #[tokio::test]
+async fn test_parallel_replay_failed_defaults_message() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "FAILED",
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in replay");
+        #[allow(unreachable_code)]
+        Ok::<String, DurableError>("".to_string())
+    };
+
+    let err = ctx
+        .parallel(Some("parallel"), vec![branch], None)
+        .await
+        .expect_err("parallel should fail in replay");
+
+    match err {
+        DurableError::BatchOperationFailed { message, .. } => {
+            assert_eq!(message, "Batch operation failed");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_parallel_min_successful_completes_early() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
@@ -66,6 +99,61 @@ async fn test_parallel_min_successful_completes_early() {
         BatchCompletionReason::MinSuccessfulReached
     );
     assert_eq!(batch.success_count(), 1);
+}
+
+#[tokio::test]
+async fn test_parallel_execution_min_successful_aborts_inflight() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..6 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let completion = CompletionConfig::new().with_min_successful(1);
+    let config = ParallelConfig::new()
+        .with_max_concurrency(2)
+        .with_completion_config(completion);
+
+    #[derive(Clone, Copy)]
+    enum Timing {
+        Fast(u32),
+        Slow(u32),
+    }
+
+    fn make_timed_branch(
+        timing: Timing,
+    ) -> impl Fn(DurableContextHandle) -> BoxFuture<'static, crate::error::DurableResult<u32>>
+           + Send
+           + Sync
+           + 'static {
+        move |_ctx: DurableContextHandle| {
+            Box::pin(async move {
+                match timing {
+                    Timing::Fast(value) => Ok(value),
+                    Timing::Slow(value) => {
+                        tokio::time::sleep(StdDuration::from_millis(50)).await;
+                        Ok(value)
+                    }
+                }
+            })
+        }
+    }
+
+    let fast = NamedParallelBranch::new(make_timed_branch(Timing::Fast(1))).with_name("fast");
+    let slow = NamedParallelBranch::new(make_timed_branch(Timing::Slow(2)));
+
+    let batch: BatchResult<u32> = ctx
+        .parallel_named(Some("parallel"), vec![fast, slow], Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        batch.completion_reason,
+        BatchCompletionReason::MinSuccessfulReached
+    );
+    assert_eq!(batch.succeeded().len(), 1);
+    assert_eq!(batch.started().len(), 1);
 }
 
 #[tokio::test]
@@ -355,4 +443,103 @@ async fn test_parallel_replay_skips_incomplete_children() {
     assert_eq!(batch.success_count(), 1);
     assert_eq!(batch.failure_count(), 0);
     assert_eq!(batch.values(), vec!["ok".to_string()]);
+}
+
+#[tokio::test]
+async fn test_parallel_replay_includes_failed_and_started_children() {
+    let arn = "arn:test:durable";
+    let name = Some("parallel");
+
+    let par_step_id = "parallel_0".to_string();
+    let par_hashed_id = CheckpointManager::hash_id(&par_step_id);
+    let summary = json!({
+        "totalCount": 3,
+        "successCount": 1,
+        "failureCount": 1,
+    })
+    .to_string();
+
+    let par_op = json!({
+        "Id": par_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary },
+    });
+
+    let branch0_name = "parallel-branch-0".to_string();
+    let child0_step_id = format!("{}_{}", branch0_name, 1);
+    let child0_hashed_id = CheckpointManager::hash_id(&child0_step_id);
+    let child0_result = serde_json::to_string(&"ok").unwrap();
+    let child0_op = json!({
+        "Id": child0_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": child0_result },
+    });
+
+    let branch1_name = "parallel-branch-1".to_string();
+    let child1_step_id = format!("{}_{}", branch1_name, 2);
+    let child1_hashed_id = CheckpointManager::hash_id(&child1_step_id);
+    let child1_op = json!({
+        "Id": child1_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "FAILED",
+        "ContextDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "branch boom" }
+        },
+    });
+
+    let branch2_name = "parallel-branch-2".to_string();
+    let child2_step_id = format!("{}_{}", branch2_name, 3);
+    let child2_hashed_id = CheckpointManager::hash_id(&child2_step_id);
+    let child2_op = json!({
+        "Id": child2_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "STARTED",
+    });
+
+    let ctx = make_replay_context(arn, vec![par_op, child0_op, child1_op, child2_op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in replay");
+        #[allow(unreachable_code)]
+        Ok::<String, DurableError>("".to_string())
+    };
+
+    let batch: BatchResult<String> = ctx
+        .parallel(name, vec![branch, branch, branch], None)
+        .await
+        .unwrap();
+
+    assert_eq!(batch.succeeded().len(), 1);
+    assert_eq!(batch.failed().len(), 1);
+    assert_eq!(batch.started().len(), 1);
+    let err = batch.first_error().expect("failed item");
+    assert!(err.to_string().contains("branch boom"));
+}
+
+#[tokio::test]
+async fn test_parallel_replay_missing_op_executes_empty_branches() {
+    let arn = "arn:test:durable";
+    let lambda_service = Arc::new(MockLambdaService::new());
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let ctx = make_replay_context_with_service(arn, vec![], lambda_service).await;
+    type BranchFn =
+        fn(DurableContextHandle) -> BoxFuture<'static, crate::error::DurableResult<u32>>;
+    let branches: Vec<NamedParallelBranch<BranchFn>> = Vec::new();
+
+    let batch: BatchResult<u32> = ctx
+        .parallel_named(Some("parallel"), branches, None)
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
 }

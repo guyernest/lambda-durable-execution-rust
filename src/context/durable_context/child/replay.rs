@@ -134,16 +134,9 @@ mod tests {
     async fn test_evaluate_replay_none_returns_continue() {
         let ctx = make_execution_context().await;
 
-        let decision = evaluate_replay::<u32>(
-            None,
-            None,
-            "hashed",
-            "child_0",
-            None,
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let decision = evaluate_replay::<u32>(None, None, "hashed", "child_0", None, &ctx)
+            .await
+            .unwrap();
 
         match decision {
             ChildReplayDecision::Continue => {}
@@ -175,16 +168,9 @@ mod tests {
             chained_invoke_details: None,
         };
 
-        let decision = evaluate_replay::<u32>(
-            Some(op),
-            None,
-            "hashed",
-            "child_0",
-            None,
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let decision = evaluate_replay::<u32>(Some(op), None, "hashed", "child_0", None, &ctx)
+            .await
+            .unwrap();
 
         match decision {
             ChildReplayDecision::Continue => {}

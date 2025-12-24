@@ -146,7 +146,10 @@ async fn test_callback_handle_wait_replay_missing_result_returns_error() {
         .await
         .unwrap();
 
-    let err = handle.wait().await.expect_err("missing result should error");
+    let err = handle
+        .wait()
+        .await
+        .expect_err("missing result should error");
     match err {
         DurableError::Internal(message) => {
             assert!(message.contains("Missing callback result"));
@@ -233,7 +236,10 @@ async fn test_callback_handle_wait_raw_replay_failed_returns_error() {
         .await
         .unwrap();
 
-    let err = handle.wait_raw().await.expect_err("callback raw should fail");
+    let err = handle
+        .wait_raw()
+        .await
+        .expect_err("callback raw should fail");
     match err {
         DurableError::CallbackFailed { message, .. } => {
             assert!(message.contains("nope"));
