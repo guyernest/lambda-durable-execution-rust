@@ -179,6 +179,45 @@ async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_execution_failure_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let err = ctx
+        .run_in_child_context(
+            None,
+            |_child_ctx| async move { Err(DurableError::Internal("boom".to_string())) },
+            None::<crate::types::ChildContextConfig<u32>>,
+        )
+        .await
+        .expect_err("child context should fail");
+
+    match err {
+        DurableError::ChildContextFailed { message, .. } => {
+            assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let fail = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.action == OperationAction::Fail
+        })
+        .expect("fail update");
+    assert!(fail.name.is_none());
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_execution_large_payload_sets_replay_children() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

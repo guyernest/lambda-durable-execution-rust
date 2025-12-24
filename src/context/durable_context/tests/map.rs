@@ -690,3 +690,102 @@ async fn test_map_replay_started_op_executes() {
 
     assert_eq!(batch.success_count(), 1);
 }
+
+#[tokio::test]
+async fn test_map_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-map".to_string()))
+        .await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let start = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("Map")
+                && update.action == OperationAction::Start
+        })
+        .expect("map start update");
+    assert_eq!(start.parent_id.as_deref(), Some("parent-map"));
+}
+
+#[tokio::test]
+async fn test_map_execution_without_name() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            None,
+            vec![1u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let map_updates: Vec<_> = updates
+        .iter()
+        .filter(|update| update.sub_type.as_deref() == Some("Map"))
+        .collect();
+    assert!(map_updates.iter().all(|update| update.name.is_none()));
+}
+
+#[tokio::test]
+async fn test_map_invalid_completion_config_returns_error() {
+    let arn = "arn:test:durable";
+    let (ctx, _lambda_service) = make_execution_context(arn).await;
+
+    let completion = CompletionConfig::new().with_min_successful(2);
+    let config = MapConfig::new().with_completion_config(completion);
+    let err = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |_item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(0) },
+            Some(config),
+        )
+        .await
+        .expect_err("invalid completion config should error");
+
+    match err {
+        DurableError::InvalidConfiguration { message } => {
+            assert!(message.contains("min_successful"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

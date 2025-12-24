@@ -102,6 +102,34 @@ async fn test_parallel_min_successful_completes_early() {
 }
 
 #[tokio::test]
+async fn test_parallel_execution_empty_branches_with_batch_serdes() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    type BranchFn =
+        fn(DurableContextHandle) -> BoxFuture<'static, crate::error::DurableResult<u32>>;
+    let branches: Vec<NamedParallelBranch<BranchFn>> = Vec::new();
+
+    let batch_serdes = StaticBatchSerdes::<u32> {
+        items: Vec::new(),
+        completion_reason: BatchCompletionReason::AllCompleted,
+    };
+    let config = ParallelConfig::new().with_serdes(Arc::new(batch_serdes));
+
+    let batch: BatchResult<u32> = ctx
+        .parallel_named(Some("parallel"), branches, Some(config))
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+}
+
+#[tokio::test]
 async fn test_parallel_execution_min_successful_aborts_inflight() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

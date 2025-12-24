@@ -1051,4 +1051,106 @@ mod tests {
 
         assert!(err.to_string().contains("Checkpoint failed"));
     }
+
+    #[tokio::test]
+    async fn test_handler_termination_serdes_failed_without_message_defaults() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate(crate::termination::TerminationResult::new(
+                        TerminationReason::SerdesFailed,
+                    ))
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect_err("serdes failure should surface");
+
+        assert!(err.to_string().contains("Serdes operation failed"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_termination_context_validation_defaults_message() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, ctx| async move {
+                ctx.execution_context()
+                    .termination_manager
+                    .terminate(crate::termination::TerminationResult::new(
+                        TerminationReason::ContextValidationError,
+                    ))
+                    .await;
+                std::future::pending::<DurableResult<serde_json::Value>>().await
+            },
+            config,
+        )
+        .await
+        .expect("context validation should map to failed output");
+
+        assert_eq!(output.status, InvocationStatus::Failed);
+        let err = output.error.expect("error object");
+        assert!(err.error_message.contains("Context validation error"));
+    }
 }

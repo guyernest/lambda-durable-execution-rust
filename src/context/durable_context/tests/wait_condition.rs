@@ -275,6 +275,45 @@ async fn test_wait_for_condition_execution_continue_retries() {
 }
 
 #[tokio::test]
+async fn test_wait_for_condition_execution_check_fn_error_returns_error() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let err = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                Err::<u32, _>(DurableError::Internal("boom".to_string()))
+            },
+            config,
+        )
+        .await
+        .expect_err("check_fn error should surface");
+
+    match err {
+        DurableError::Internal(message) => assert!(message.contains("boom")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step
+            && update.action == OperationAction::Start
+            && update.sub_type.as_deref() == Some("WaitForCondition")
+    }));
+}
+
+#[tokio::test]
 async fn test_wait_for_condition_execution_max_attempts_exceeded() {
     let arn = "arn:test:durable";
     let step_id = "wait_0".to_string();
@@ -316,6 +355,41 @@ async fn test_wait_for_condition_execution_max_attempts_exceeded() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_max_attempts_not_exceeded() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 0 },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
+    let config = WaitConditionConfig::new(
+        1u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    )
+    .with_max_attempts(2);
+
+    let value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        )
+        .await
+        .expect("wait_for_condition should succeed");
+
+    assert_eq!(value, 2);
 }
 
 #[tokio::test]
