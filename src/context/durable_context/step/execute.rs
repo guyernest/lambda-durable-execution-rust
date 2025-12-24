@@ -205,12 +205,14 @@ mod tests {
     use super::*;
     use crate::error::BoxError;
     use crate::mock::{MockCheckpointConfig, MockLambdaService};
-    use crate::retry::NoRetry;
+    use crate::retry::{NoRetry, RetryDecision, RetryStrategy};
+    use crate::termination::TerminationReason;
     use crate::types::{
-        DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState, Operation,
-        OperationStatus, OperationType, StepDetails,
+        DurableExecutionInvocationInput, Duration, ExecutionDetails, InitialExecutionState,
+        Operation, OperationStatus, OperationType, StepDetails,
     };
     use std::sync::Arc;
+    use std::time::Duration as StdDuration;
 
     async fn make_execution_context_with_op(
         op: Operation,
@@ -248,6 +250,52 @@ mod tests {
             .await
             .expect("execution context should initialize");
         (exec_ctx, lambda_service)
+    }
+
+    async fn make_execution_context() -> (ExecutionContext, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some("{}".to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (exec_ctx, lambda_service)
+    }
+
+    #[derive(Debug)]
+    struct AlwaysRetry;
+
+    impl RetryStrategy for AlwaysRetry {
+        fn should_retry(
+            &self,
+            _error: &(dyn std::error::Error + Send + Sync),
+            _attempts_made: u32,
+        ) -> RetryDecision {
+            RetryDecision::retry_after(Duration::seconds(5))
+        }
     }
 
     #[tokio::test]
@@ -303,5 +351,183 @@ mod tests {
         assert!(updates
             .iter()
             .all(|update| update.action != OperationAction::Start));
+    }
+
+    #[tokio::test]
+    async fn test_run_step_execution_starts_and_succeeds_at_most_once() {
+        let step_id = "step_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let result: u32 = run_step_execution(
+            &ctx,
+            Some("step"),
+            |_step_ctx| async move { Ok::<u32, BoxError>(5) },
+            step_id.clone(),
+            hashed_id.clone(),
+            None,
+            StepSemantics::AtMostOncePerRetry,
+            Arc::new(NoRetry),
+            None,
+            Some("parent".to_string()),
+        )
+        .await
+        .expect("step should succeed");
+
+        assert_eq!(result, 5);
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Succeed));
+    }
+
+    #[tokio::test]
+    async fn test_run_step_execution_starts_and_succeeds_at_least_once() {
+        let step_id = "step_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let result: u32 = run_step_execution(
+            &ctx,
+            Some("step"),
+            |_step_ctx| async move { Ok::<u32, BoxError>(9) },
+            step_id.clone(),
+            hashed_id.clone(),
+            None,
+            StepSemantics::AtLeastOncePerRetry,
+            Arc::new(NoRetry),
+            None,
+            None,
+        )
+        .await
+        .expect("step should succeed");
+
+        assert_eq!(result, 9);
+
+        ctx.execution_ctx
+            .checkpoint_manager
+            .wait_for_queue_completion()
+            .await;
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates
+            .iter()
+            .any(|update| update.action == OperationAction::Succeed));
+    }
+
+    #[tokio::test]
+    async fn test_run_step_execution_retry_terminates() {
+        let step_id = "step_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let result = tokio::time::timeout(
+            StdDuration::from_millis(50),
+            run_step_execution(
+                &ctx,
+                Some("step"),
+                |_step_ctx| async move {
+                    Err::<u32, BoxError>(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "boom",
+                    )))
+                },
+                step_id.clone(),
+                hashed_id.clone(),
+                None,
+                StepSemantics::AtMostOncePerRetry,
+                Arc::new(AlwaysRetry),
+                None,
+                None,
+            ),
+        )
+        .await;
+
+        assert!(result.is_err(), "step should suspend for retry");
+
+        let termination = ctx
+            .execution_ctx
+            .termination_manager
+            .get_termination_result()
+            .expect("termination should be recorded");
+        assert_eq!(termination.reason, TerminationReason::RetryScheduled);
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates.iter().any(|update| update.action == OperationAction::Retry));
+    }
+
+    #[tokio::test]
+    async fn test_run_step_execution_no_retry_fails() {
+        let step_id = "step_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+
+        let (exec_ctx, lambda_service) = make_execution_context().await;
+        for _ in 0..2 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let ctx = DurableContextImpl::new(exec_ctx);
+        let err = run_step_execution(
+            &ctx,
+            Some("step"),
+            |_step_ctx| async move {
+                Err::<u32, BoxError>(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "boom",
+                )))
+            },
+            step_id.clone(),
+            hashed_id.clone(),
+            None,
+            StepSemantics::AtMostOncePerRetry,
+            Arc::new(NoRetry),
+            None,
+            None,
+        )
+        .await
+        .expect_err("step should fail without retries");
+
+        match err {
+            DurableError::StepFailed { name, attempts, .. } => {
+                assert_eq!(name, step_id);
+                assert_eq!(attempts, 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let updates: Vec<_> = lambda_service
+            .checkpoint_calls()
+            .into_iter()
+            .flat_map(|call| call.updates)
+            .collect();
+        assert!(updates.iter().any(|update| update.action == OperationAction::Fail));
     }
 }

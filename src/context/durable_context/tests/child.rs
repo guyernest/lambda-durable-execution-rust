@@ -258,6 +258,36 @@ async fn test_run_in_child_context_execution_large_payload_sets_replay_children(
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_execution_serialize_failure_terminates() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = ChildContextConfig::new().with_serdes(Arc::new(SerializeFailSerdes));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(5u32) },
+            Some(config),
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "child context should suspend on serdes failure");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::SerdesFailed);
+    let message = termination.message.unwrap_or_default();
+    assert!(message.contains("Serialization failed"));
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_replay_uses_context_result() {
     let arn = "arn:test:durable";
     let step_id = "child_0".to_string();

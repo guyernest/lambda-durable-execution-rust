@@ -516,6 +516,31 @@ async fn test_map_execution_with_item_namer_and_batch_serdes() {
 }
 
 #[tokio::test]
+async fn test_map_execution_max_concurrency_exceeds_items() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let config = MapConfig::new().with_max_concurrency(10);
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item + 1) },
+            Some(config),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+    assert_eq!(batch.values(), vec![2u32]);
+}
+
+#[tokio::test]
 async fn test_map_execution_min_successful_aborts_inflight() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

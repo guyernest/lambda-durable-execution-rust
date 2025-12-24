@@ -323,11 +323,22 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::sync::Arc;
+    use std::sync::Once;
 
     #[test]
     fn test_config_builder() {
         let config = DurableExecutionConfig::new();
         assert!(config.lambda_service.is_none());
+    }
+
+    fn init_aws_env() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+            std::env::set_var("AWS_REGION", "us-east-1");
+            std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+        });
     }
 
     #[tokio::test]
@@ -441,6 +452,47 @@ mod tests {
 
         assert_eq!(output.status, crate::types::InvocationStatus::Succeeded);
         assert_eq!(output.result, Some("{\"ok\":true}".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_handler_uses_default_lambda_service() {
+        init_aws_env();
+
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(input_payload),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            DurableExecutionConfig::new(),
+        )
+        .await
+        .expect("handler should succeed");
+
+        assert_eq!(output.status, crate::types::InvocationStatus::Succeeded);
     }
 
     #[tokio::test]

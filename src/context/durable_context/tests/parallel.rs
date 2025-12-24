@@ -130,6 +130,28 @@ async fn test_parallel_execution_empty_branches_with_batch_serdes() {
 }
 
 #[tokio::test]
+async fn test_parallel_execution_empty_branches_without_batch_serdes() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    type BranchFn =
+        fn(DurableContextHandle) -> BoxFuture<'static, crate::error::DurableResult<u32>>;
+    let branches: Vec<BranchFn> = Vec::new();
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, None)
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+}
+
+#[tokio::test]
 async fn test_parallel_execution_min_successful_aborts_inflight() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
@@ -182,6 +204,27 @@ async fn test_parallel_execution_min_successful_aborts_inflight() {
     );
     assert_eq!(batch.succeeded().len(), 1);
     assert_eq!(batch.started().len(), 1);
+}
+
+#[tokio::test]
+async fn test_parallel_execution_max_concurrency_exceeds_branches() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let config = ParallelConfig::new().with_max_concurrency(8);
+    let branches = vec![make_parallel_branch(BranchBehavior::Ok(7))];
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, Some(config))
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
+    assert_eq!(batch.values(), vec![7u32]);
 }
 
 #[tokio::test]
