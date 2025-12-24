@@ -12,7 +12,7 @@ use crate::error::DurableResult;
 use crate::types::DurableLogger;
 use crate::types::{
     DurableExecutionInvocationInput, DurableExecutionInvocationOutput, LambdaService,
-    OperationAction, OperationType, RealLambdaService,
+    RealLambdaService,
 };
 use aws_sdk_lambda::Client as LambdaClient;
 use futures::future::BoxFuture;
@@ -318,7 +318,8 @@ mod tests {
     use crate::mock::MockLambdaService;
     use crate::termination::TerminationReason;
     use crate::types::{
-        ExecutionDetails, InitialExecutionState, InvocationStatus, Operation, OperationStatus,
+        ExecutionDetails, InitialExecutionState, InvocationStatus, Operation, OperationAction,
+        OperationStatus, OperationType,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::json;
