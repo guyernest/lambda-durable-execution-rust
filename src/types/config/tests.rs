@@ -48,6 +48,23 @@ fn test_callback_config_builder() {
 }
 
 #[test]
+fn test_callback_config_clone_and_debug() {
+    let config: CallbackConfig<String> = CallbackConfig::new()
+        .with_timeout(Duration::minutes(1))
+        .with_heartbeat_timeout(Duration::seconds(10))
+        .with_retry_strategy(Arc::new(NoRetry::new()))
+        .with_serdes(Arc::new(NoopSerdes));
+
+    let cloned = config.clone();
+    assert!(cloned.retry_strategy.is_some());
+    assert!(cloned.serdes.is_some());
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("retry_strategy: true"));
+    assert!(debug.contains("serdes: true"));
+}
+
+#[test]
 fn test_invoke_config_builder_and_clone() {
     let config: InvokeConfig<i32, i32> = InvokeConfig::new()
         .with_payload_serdes(Arc::new(JsonSerdes))
@@ -62,6 +79,9 @@ fn test_invoke_config_builder_and_clone() {
     assert!(cloned.payload_serdes.is_some());
     assert!(cloned.result_serdes.is_some());
     assert_eq!(cloned.tenant_id.as_deref(), Some("tenant-1"));
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("tenant_id"));
 }
 
 #[test]
@@ -72,6 +92,10 @@ fn test_child_context_config_builder() {
 
     assert_eq!(config.sub_type.as_deref(), Some("child"));
     assert!(config.serdes.is_some());
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("sub_type: Some(\"child\")"));
+    assert!(debug.contains("serdes: true"));
 }
 
 #[test]
@@ -106,6 +130,9 @@ fn test_parallel_config_builder() {
     assert_eq!(config.completion_config.tolerated_failure_count, Some(2));
     assert!(config.serdes.is_some());
     assert!(config.item_serdes.is_some());
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("item_serdes: true"));
 }
 
 #[test]
@@ -133,6 +160,9 @@ fn test_map_config_builder_and_clone() {
     assert!(cloned.serdes.is_some());
     assert!(cloned.item_serdes.is_some());
     assert_eq!(cloned.completion_config.min_successful, Some(1));
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("item_namer: true"));
 }
 
 #[test]
@@ -154,6 +184,9 @@ fn test_wait_condition_config_builder() {
     assert_eq!(config.initial_state, 0);
     assert_eq!(config.max_attempts, Some(3));
     assert!(config.serdes.is_some());
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("max_attempts: Some(3)"));
 }
 
 #[test]
@@ -162,6 +195,19 @@ fn test_step_config_with_retry_strategy() {
         StepConfig::new().with_retry_strategy(Arc::new(NoRetry::new()));
 
     assert!(config.retry_strategy.is_some());
+}
+
+#[test]
+fn test_step_config_serdes_and_debug() {
+    let config: StepConfig<u32> = StepConfig::new()
+        .with_semantics(StepSemantics::AtMostOncePerRetry)
+        .with_serdes(Arc::new(NoopSerdes));
+
+    assert!(config.serdes.is_some());
+
+    let debug = format!("{:?}", config);
+    assert!(debug.contains("AtMostOncePerRetry"));
+    assert!(debug.contains("serdes: true"));
 }
 
 #[test]

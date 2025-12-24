@@ -171,4 +171,25 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_tracing_logger_log_levels() {
+        let logger = TracingLogger;
+        let data = DurableLogData {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            operation_id: Some("op-1".to_string()),
+            step_name: Some("step".to_string()),
+            attempt: Some(2),
+        };
+
+        logger.log(DurableLogLevel::Debug, &data, "debug", None);
+        logger.log(
+            DurableLogLevel::Info,
+            &data,
+            "info",
+            Some(&[("key", "value".to_string())]),
+        );
+        logger.log(DurableLogLevel::Warn, &data, "warn", None);
+        logger.log(DurableLogLevel::Error, &data, "error", None);
+    }
 }
