@@ -446,24 +446,25 @@ mod tests {
         }
 
         let ctx = DurableContextImpl::new(exec_ctx);
-        let result = tokio::time::timeout(
-            StdDuration::from_millis(50),
-            run_step_execution(
-                &ctx,
-                Some("step"),
-                |_step_ctx| async move {
-                    Err::<u32, BoxError>(Box::new(std::io::Error::other("boom")))
-                },
-                step_id.clone(),
-                hashed_id.clone(),
-                None,
-                StepSemantics::AtMostOncePerRetry,
-                Arc::new(AlwaysRetry),
-                None,
-                None,
-            ),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(
+                StdDuration::from_millis(50),
+                run_step_execution(
+                    &ctx,
+                    Some("step"),
+                    |_step_ctx| async move {
+                        Err::<u32, BoxError>(Box::new(std::io::Error::other("boom")))
+                    },
+                    step_id.clone(),
+                    hashed_id.clone(),
+                    None,
+                    StepSemantics::AtMostOncePerRetry,
+                    Arc::new(AlwaysRetry),
+                    None,
+                    None,
+                ),
+            )
+            .await;
 
         assert!(result.is_err(), "step should suspend for retry");
 
