@@ -202,6 +202,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::DurableError;
     use crate::mock::MockLambdaService;
     use crate::types::{
         BatchCompletionReason, BatchItem, BatchItemStatus, CompletionConfig,
@@ -446,6 +447,132 @@ mod tests {
             result.completion_reason,
             BatchCompletionReason::AllCompleted
         );
+    }
+
+    #[tokio::test]
+    async fn test_maybe_replay_parallel_failed_returns_error() {
+        let arn = "arn:test:durable";
+        let step_id = "parallel_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let op = json!({
+            "Id": hashed_id,
+            "Type": "CONTEXT",
+            "SubType": "Parallel",
+            "Status": "FAILED",
+            "ContextDetails": { "Error": { "ErrorMessage": "boom" } },
+        });
+
+        let execution_ctx = make_execution_context(arn, vec![op]).await;
+        fn branch_fn(
+            _ctx: DurableContextHandle,
+        ) -> BoxFuture<'static, crate::error::DurableResult<u32>> {
+            Box::pin(async move { Ok(1) })
+        }
+        let branches: Vec<NamedParallelBranch<_>> = vec![NamedParallelBranch::new(branch_fn)];
+
+        let err = maybe_replay_parallel::<u32, _>(
+            Some("parallel"),
+            &branches,
+            &None,
+            &None,
+            &execution_ctx,
+            &hashed_id,
+            &CompletionConfig::new(),
+        )
+        .await
+        .expect_err("failed parallel should return error");
+
+        match err {
+            DurableError::BatchOperationFailed { name, message, .. } => {
+                assert_eq!(name, "parallel");
+                assert!(message.contains("boom"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_maybe_replay_parallel_reconstructs_children_from_total_count() {
+        let arn = "arn:test:durable";
+        let step_id = "parallel_0".to_string();
+        let hashed_id = CheckpointManager::hash_id(&step_id);
+        let payload = json!({ "totalCount": 3 }).to_string();
+        let op = json!({
+            "Id": hashed_id,
+            "Type": "CONTEXT",
+            "SubType": "Parallel",
+            "Status": "SUCCEEDED",
+            "ContextDetails": { "Result": payload },
+        });
+
+        let base = "parallel";
+        let branch_names = vec![
+            format!("{base}-branch-0"),
+            format!("{base}-branch-1"),
+            format!("{base}-branch-2"),
+        ];
+
+        let child_success_payload = serde_json::to_string(&1u32).unwrap();
+        let child_ops = vec![
+            json!({
+                "Id": CheckpointManager::hash_id(&format!("{}_0", branch_names[0])),
+                "Type": "CONTEXT",
+                "SubType": "ParallelBranch",
+                "Status": "SUCCEEDED",
+                "ContextDetails": { "Result": child_success_payload },
+            }),
+            json!({
+                "Id": CheckpointManager::hash_id(&format!("{}_1", branch_names[1])),
+                "Type": "CONTEXT",
+                "SubType": "ParallelBranch",
+                "Status": "FAILED",
+                "ContextDetails": { "Error": { "ErrorMessage": "child boom" } },
+            }),
+            json!({
+                "Id": CheckpointManager::hash_id(&format!("{}_2", branch_names[2])),
+                "Type": "CONTEXT",
+                "SubType": "ParallelBranch",
+                "Status": "STARTED",
+            }),
+        ];
+
+        let mut operations = vec![op];
+        operations.extend(child_ops);
+        let execution_ctx = make_execution_context(arn, operations).await;
+
+        fn branch_fn(
+            _ctx: DurableContextHandle,
+        ) -> BoxFuture<'static, crate::error::DurableResult<u32>> {
+            Box::pin(async move { Ok(1) })
+        }
+        let branches: Vec<NamedParallelBranch<_>> = vec![
+            NamedParallelBranch::new(branch_fn),
+            NamedParallelBranch::new(branch_fn),
+            NamedParallelBranch::new(branch_fn),
+        ];
+
+        let result = maybe_replay_parallel::<u32, _>(
+            Some(base),
+            &branches,
+            &None,
+            &None,
+            &execution_ctx,
+            &hashed_id,
+            &CompletionConfig::new(),
+        )
+        .await
+        .unwrap()
+        .expect("batch result");
+
+        assert_eq!(result.success_count(), 1);
+        assert_eq!(result.failure_count(), 1);
+        assert_eq!(result.started_count(), 1);
+        let failed = result.failed();
+        let err = failed
+            .first()
+            .and_then(|item| item.error.as_ref())
+            .expect("failed error");
+        assert!(err.to_string().contains("child boom"));
     }
 
     #[tokio::test]

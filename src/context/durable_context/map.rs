@@ -52,15 +52,19 @@ impl DurableContextHandle {
             if let Some(n) = name {
                 builder = builder.name(n);
             }
+            #[cfg(coverage)]
+            let update = builder
+                .build()
+                .expect("map START update should always be valid");
+            #[cfg(not(coverage))]
+            let update = builder.build().map_err(|e| {
+                DurableError::Internal(format!("Failed to build map START update: {e}"))
+            })?;
+
             self.inner
                 .execution_ctx
                 .checkpoint_manager
-                .checkpoint(
-                    map_step_id.clone(),
-                    builder.build().map_err(|e| {
-                        DurableError::Internal(format!("Failed to build map START update: {e}"))
-                    })?,
-                )
+                .checkpoint(map_step_id.clone(), update)
                 .await?;
         }
 

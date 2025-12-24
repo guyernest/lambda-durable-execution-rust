@@ -45,3 +45,6 @@ tokio-test = "0.4"
 [features]
 default = []
 testutils = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }

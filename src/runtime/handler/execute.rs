@@ -374,6 +374,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_execute_large_payload_checkpoint_success_returns_empty_result() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = input_with_payload(Some(input_payload));
+
+        let mock = Arc::new(MockLambdaService::new());
+        mock.expect_checkpoint(MockCheckpointConfig::default());
+
+        let config = DurableExecutionConfig::new().with_lambda_service(mock);
+
+        let big = "a".repeat(LAMBDA_RESPONSE_SIZE_LIMIT + 64);
+        let output = execute_durable_handler(
+            input,
+            move |_event: serde_json::Value, _ctx| {
+                let big = big.clone();
+                async move { Ok(json!({ "data": big })) }
+            },
+            config,
+        )
+        .await
+        .expect("handler should succeed");
+
+        assert_eq!(output.status, InvocationStatus::Succeeded);
+        assert_eq!(output.result, Some(String::new()));
+    }
+
+    #[tokio::test]
     async fn test_execute_uses_default_lambda_service() {
         init_aws_env();
         let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
