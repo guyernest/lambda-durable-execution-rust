@@ -277,3 +277,121 @@ where
 
     Ok(batch_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::BoxFuture;
+    use crate::error::{DurableError, DurableResult};
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::types::{
+        CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState,
+        NamedParallelBranch, Operation, OperationStatus, OperationType, ParallelConfig,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+
+    async fn make_execution_context() -> (Arc<DurableContextImpl>, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(json!({}).to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (Arc::new(DurableContextImpl::new(exec_ctx)), lambda_service)
+    }
+
+    #[tokio::test]
+    async fn test_run_parallel_execution_empty_branches() {
+        let (inner, lambda_service) = make_execution_context().await;
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+        let par_step_id = "parallel_0".to_string();
+        let par_hashed_id = CheckpointManager::hash_id(&par_step_id);
+        let cfg = ParallelConfig::<u32>::new();
+        type BranchFn = fn(DurableContextHandle) -> BoxFuture<'static, DurableResult<u32>>;
+        let branches: Vec<NamedParallelBranch<BranchFn>> = Vec::new();
+
+        let result = run_parallel_execution(
+            inner,
+            Some("parallel"),
+            branches,
+            cfg,
+            None,
+            None,
+            par_step_id,
+            par_hashed_id,
+        )
+        .await
+        .expect("parallel should succeed");
+
+        assert!(result.all.is_empty());
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+
+    #[tokio::test]
+    async fn test_run_parallel_execution_mixed_results() {
+        let (inner, lambda_service) = make_execution_context().await;
+        for _ in 0..8 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let par_step_id = "parallel_0".to_string();
+        let par_hashed_id = CheckpointManager::hash_id(&par_step_id);
+        let cfg = ParallelConfig::new()
+            .with_max_concurrency(4)
+            .with_completion_config(CompletionConfig::new().with_tolerated_failures(1));
+
+        fn ok_branch(_ctx: DurableContextHandle) -> BoxFuture<'static, DurableResult<u32>> {
+            Box::pin(async { Ok(1) })
+        }
+
+        fn fail_branch(_ctx: DurableContextHandle) -> BoxFuture<'static, DurableResult<u32>> {
+            Box::pin(async { Err(DurableError::Internal("boom".to_string())) })
+        }
+
+        type BranchFn = fn(DurableContextHandle) -> BoxFuture<'static, DurableResult<u32>>;
+        let ok = NamedParallelBranch::new(ok_branch as BranchFn);
+        let fail = NamedParallelBranch::new(fail_branch as BranchFn);
+
+        let result = run_parallel_execution(
+            inner,
+            Some("parallel"),
+            vec![ok, fail],
+            cfg,
+            None,
+            None,
+            par_step_id,
+            par_hashed_id,
+        )
+        .await
+        .expect("parallel should succeed");
+
+        assert_eq!(result.success_count(), 1);
+        assert_eq!(result.failure_count(), 1);
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+}

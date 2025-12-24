@@ -204,3 +204,125 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::DurableError;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::types::{
+        ExecutionDetails, InitialExecutionState, InvocationStatus, Operation, OperationStatus,
+    };
+    use serde_json::json;
+    use std::sync::{Arc, Once};
+
+    fn init_aws_env() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+            std::env::set_var("AWS_REGION", "us-east-1");
+            std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+        });
+    }
+
+    fn input_with_payload(payload: Option<String>) -> DurableExecutionInvocationInput {
+        DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: payload,
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_missing_execution_op_returns_error() {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:aws:lambda:us-east-1:123:function:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![],
+                next_marker: None,
+            },
+        };
+
+        let config =
+            DurableExecutionConfig::new().with_lambda_service(Arc::new(MockLambdaService::new()));
+
+        let err = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            config,
+        )
+        .await
+        .expect_err("missing execution op should error");
+
+        assert!(err
+            .to_string()
+            .contains("Missing execution operation in initial execution state"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_large_payload_checkpoint_failure_returns_empty_result() {
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = input_with_payload(Some(input_payload));
+
+        let mut fail = MockCheckpointConfig::default();
+        fail.error = Some(DurableError::Internal("checkpoint failed".to_string()));
+
+        let mock = Arc::new(MockLambdaService::new());
+        mock.expect_checkpoint(fail);
+
+        let config = DurableExecutionConfig::new().with_lambda_service(mock);
+
+        let big = "a".repeat(LAMBDA_RESPONSE_SIZE_LIMIT + 64);
+        let output = execute_durable_handler(
+            input,
+            move |_event: serde_json::Value, _ctx| {
+                let big = big.clone();
+                async move { Ok(json!({ "data": big })) }
+            },
+            config,
+        )
+        .await
+        .expect("handler should succeed even when checkpoint fails");
+
+        assert_eq!(output.status, InvocationStatus::Succeeded);
+        assert_eq!(output.result, Some(String::new()));
+    }
+
+    #[tokio::test]
+    async fn test_execute_uses_default_lambda_service() {
+        init_aws_env();
+        let input_payload = serde_json::to_string(&json!({"value": 1})).unwrap();
+        let input = input_with_payload(Some(input_payload));
+
+        let output = execute_durable_handler(
+            input,
+            |_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) },
+            DurableExecutionConfig::new(),
+        )
+        .await
+        .expect("handler should succeed");
+
+        assert_eq!(output.status, InvocationStatus::Succeeded);
+    }
+}

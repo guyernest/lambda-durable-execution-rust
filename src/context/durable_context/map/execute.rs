@@ -256,3 +256,120 @@ where
 
     unreachable!("map execution loop should return a batch result");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::{MockCheckpointConfig, MockLambdaService};
+    use crate::types::{
+        CompletionConfig, DurableExecutionInvocationInput, ExecutionDetails, InitialExecutionState,
+        Operation, OperationStatus, OperationType,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+
+    async fn make_execution_context() -> (Arc<DurableContextImpl>, Arc<MockLambdaService>) {
+        let input = DurableExecutionInvocationInput {
+            durable_execution_arn: "arn:test:durable".to_string(),
+            checkpoint_token: "token-0".to_string(),
+            initial_execution_state: InitialExecutionState {
+                operations: vec![Operation {
+                    id: "execution".to_string(),
+                    parent_id: None,
+                    name: None,
+                    operation_type: OperationType::Execution,
+                    sub_type: None,
+                    status: OperationStatus::Started,
+                    step_details: None,
+                    callback_details: None,
+                    wait_details: None,
+                    execution_details: Some(ExecutionDetails {
+                        input_payload: Some(json!({}).to_string()),
+                        output_payload: None,
+                    }),
+                    context_details: None,
+                    chained_invoke_details: None,
+                }],
+                next_marker: None,
+            },
+        };
+
+        let lambda_service = Arc::new(MockLambdaService::new());
+        let exec_ctx = ExecutionContext::new(&input, lambda_service.clone(), None, true)
+            .await
+            .expect("execution context should initialize");
+        (Arc::new(DurableContextImpl::new(exec_ctx)), lambda_service)
+    }
+
+    #[tokio::test]
+    async fn test_run_map_execution_empty_items() {
+        let (inner, lambda_service) = make_execution_context().await;
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+        let map_step_id = "map_0".to_string();
+        let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+        let cfg = MapConfig::<u32, u32>::new();
+        let map_fn = Arc::new(|_item: u32, _ctx: DurableContextHandle, _idx: usize| async move {
+            Ok::<u32, DurableError>(0)
+        });
+
+        let result = run_map_execution(
+            inner,
+            Some("map"),
+            Vec::new(),
+            map_fn,
+            cfg,
+            None,
+            None,
+            None,
+            map_step_id,
+            map_hashed_id,
+        )
+        .await
+        .expect("map should succeed");
+
+        assert!(result.all.is_empty());
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+
+    #[tokio::test]
+    async fn test_run_map_execution_mixed_results() {
+        let (inner, lambda_service) = make_execution_context().await;
+        for _ in 0..8 {
+            lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+        }
+
+        let map_step_id = "map_0".to_string();
+        let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
+        let cfg = MapConfig::new()
+            .with_max_concurrency(4)
+            .with_completion_config(CompletionConfig::new().with_tolerated_failures(1));
+
+        let map_fn = Arc::new(|item: u32, _ctx: DurableContextHandle, idx: usize| async move {
+            if idx == 0 {
+                Ok::<u32, DurableError>(item + 1)
+            } else {
+                Err(DurableError::Internal("boom".to_string()))
+            }
+        });
+
+        let result = run_map_execution(
+            inner,
+            Some("map"),
+            vec![1u32, 2u32],
+            map_fn,
+            cfg,
+            None,
+            None,
+            None,
+            map_step_id,
+            map_hashed_id,
+        )
+        .await
+        .expect("map should succeed");
+
+        assert_eq!(result.success_count(), 1);
+        assert_eq!(result.failure_count(), 1);
+        assert_eq!(result.completion_reason, BatchCompletionReason::AllCompleted);
+    }
+}
