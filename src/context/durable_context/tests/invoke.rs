@@ -59,6 +59,35 @@ async fn test_invoke_replay_failure_returns_error() {
 }
 
 #[tokio::test]
+async fn test_invoke_replay_failed_defaults_message() {
+    let arn = "arn:test:durable";
+    let step_id = "invoke_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CHAINED_INVOKE",
+        "Status": "FAILED",
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .invoke::<serde_json::Value, serde_json::Value>(
+            Some("invoke"),
+            "fn",
+            Option::<serde_json::Value>::None,
+        )
+        .await
+        .expect_err("invoke should fail in replay");
+
+    match err {
+        DurableError::InvocationFailed { message, .. } => {
+            assert!(message.contains("Invoke failed"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_invoke_replay_missing_result_returns_error() {
     let arn = "arn:test:durable";
     let step_id = "invoke_0".to_string();
@@ -85,6 +114,38 @@ async fn test_invoke_replay_missing_result_returns_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_invoke_replay_pending_suspends() {
+    let arn = "arn:test:durable";
+    let step_id = "invoke_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CHAINED_INVOKE",
+        "Status": "STARTED",
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.invoke::<serde_json::Value, serde_json::Value>(
+            Some("invoke"),
+            "fn",
+            Option::<serde_json::Value>::None,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "invoke should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::InvokePending);
 }
 
 #[tokio::test]

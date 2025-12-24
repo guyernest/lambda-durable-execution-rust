@@ -60,6 +60,46 @@ async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_execution_large_payload_sets_replay_children() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let big = "a".repeat(super::super::CHECKPOINT_SIZE_LIMIT_BYTES + 8);
+    let big_payload = big.clone();
+    let value: String = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(big_payload) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value.len(), big.len());
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let succeed = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Succeed)
+        .expect("succeed update");
+    assert_eq!(
+        succeed
+            .context_options
+            .as_ref()
+            .and_then(|opts| opts.replay_children),
+        Some(true)
+    );
+    assert_eq!(succeed.payload.as_deref(), Some(""));
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_replay_uses_context_result() {
     let arn = "arn:test:durable";
     let step_id = "child_0".to_string();
@@ -120,6 +160,33 @@ async fn test_run_in_child_context_replay_uses_execution_output_fallback() {
 }
 
 #[tokio::test]
+async fn test_run_in_child_context_replay_started_executes_again() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "STARTED",
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service.clone()).await;
+    let value: u32 = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move { Ok(11u32) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 11u32);
+}
+
+#[tokio::test]
 async fn test_run_in_child_context_replay_failure_returns_error() {
     let arn = "arn:test:durable";
     let step_id = "child_0".to_string();
@@ -150,6 +217,40 @@ async fn test_run_in_child_context_replay_failure_returns_error() {
     match err {
         DurableError::ChildContextFailed { message, .. } => {
             assert!(message.contains("boom"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_run_in_child_context_replay_failure_defaults_message() {
+    let arn = "arn:test:durable";
+    let step_id = "child_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "Status": "FAILED",
+        "ContextDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let err = ctx
+        .run_in_child_context(
+            Some("child"),
+            |_child_ctx| async move {
+                panic!("child context should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(json!({}))
+            },
+            None,
+        )
+        .await
+        .expect_err("child context should fail in replay");
+
+    match err {
+        DurableError::ChildContextFailed { message, .. } => {
+            assert!(message.contains("Child context failed"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

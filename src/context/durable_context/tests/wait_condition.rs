@@ -120,6 +120,45 @@ async fn test_wait_for_condition_replay_failed_returns_error() {
 }
 
 #[tokio::test]
+async fn test_wait_for_condition_replay_failed_defaults_message() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "FAILED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+    let err = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                panic!("check_fn should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(0u32)
+            },
+            config,
+        )
+        .await
+        .expect_err("wait_for_condition should fail in replay");
+
+    match err {
+        DurableError::StepFailed { message, .. } => {
+            assert!(message.contains("Wait for condition failed"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_wait_for_condition_execution_stop_succeeds() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
@@ -152,4 +191,99 @@ async fn test_wait_for_condition_execution_stop_succeeds() {
             && update.action == OperationAction::Succeed
             && update.sub_type.as_deref() == Some("WaitForCondition")
     }));
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_continue_retries() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| {
+            WaitConditionDecision::Continue {
+                delay: Duration::seconds(2),
+            }
+        }),
+    );
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 1) },
+            config,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "wait_for_condition should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::RetryScheduled);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let retry_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Retry)
+        .expect("retry update");
+    let options = retry_update
+        .step_options
+        .as_ref()
+        .expect("step options");
+    assert_eq!(options.next_attempt_delay_seconds, Some(2));
+}
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_max_attempts_exceeded() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    )
+    .with_max_attempts(1);
+
+    let err = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |_state, _step_ctx| async move {
+                panic!("check_fn should not run when attempts exceeded");
+                #[allow(unreachable_code)]
+                Ok(0u32)
+            },
+            config,
+        )
+        .await
+        .expect_err("max attempts should error");
+
+    match err {
+        DurableError::WaitConditionExceeded { attempts, .. } => {
+            assert_eq!(attempts, 2);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

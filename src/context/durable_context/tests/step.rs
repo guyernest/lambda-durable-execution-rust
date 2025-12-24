@@ -1,4 +1,18 @@
 use super::helpers::*;
+use crate::retry::{RetryDecision, RetryStrategy};
+
+#[derive(Debug)]
+struct AlwaysRetry;
+
+impl RetryStrategy for AlwaysRetry {
+    fn should_retry(
+        &self,
+        _error: &(dyn std::error::Error + Send + Sync),
+        _attempts_made: u32,
+    ) -> RetryDecision {
+        RetryDecision::retry_after(Duration::seconds(5))
+    }
+}
 
 #[tokio::test]
 async fn test_step_replay_returns_cached_result() {
@@ -100,6 +114,60 @@ async fn test_step_execution_failure_no_retry_checkpoints_fail() {
 }
 
 #[tokio::test]
+async fn test_step_execution_retry_suspends_and_checkpoints() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::<u32>::new().with_retry_strategy(Arc::new(AlwaysRetry));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(
+            Some("step"),
+            |_step_ctx| async move {
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                ))
+            },
+            Some(config),
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend for retry");
+
+    ctx.execution_context()
+        .checkpoint_manager
+        .wait_for_queue_completion()
+        .await;
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::RetryScheduled);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let retry_update = updates
+        .iter()
+        .find(|update| update.operation_type == OperationType::Step)
+        .expect("retry update");
+    assert_eq!(retry_update.action, OperationAction::Retry);
+    let options = retry_update
+        .step_options
+        .as_ref()
+        .expect("step options");
+    assert_eq!(options.next_attempt_delay_seconds, Some(5));
+}
+
+#[tokio::test]
 async fn test_step_replay_started_at_most_once_no_retry_fails() {
     let arn = "arn:test:durable";
     let step_id = "step_0".to_string();
@@ -142,6 +210,122 @@ async fn test_step_replay_started_at_most_once_no_retry_fails() {
     assert!(updates.iter().any(|update| {
         update.operation_type == OperationType::Step && update.action == OperationAction::Fail
     }));
+}
+
+#[tokio::test]
+async fn test_step_replay_started_at_most_once_retry_suspends() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![step_op], lambda_service.clone()).await;
+    let config: StepConfig<u32> = StepConfig::new()
+        .with_semantics(StepSemantics::AtMostOncePerRetry)
+        .with_retry_strategy(Arc::new(AlwaysRetry));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            Some(config),
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend for retry");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::RetryScheduled);
+}
+
+#[tokio::test]
+async fn test_step_replay_started_at_least_once_executes_again() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "STARTED",
+        "StepDetails": { "Attempt": 1 },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![step_op], lambda_service.clone()).await;
+    let config: StepConfig<u32> = StepConfig::new()
+        .with_semantics(StepSemantics::AtLeastOncePerRetry)
+        .with_retry_strategy(Arc::new(NoRetry));
+    let attempt: u32 = ctx
+        .step(
+            Some("step"),
+            |step_ctx| async move { Ok(step_ctx.attempt().unwrap_or(0)) },
+            Some(config),
+        )
+        .await
+        .expect("step should execute");
+
+    assert_eq!(attempt, 2);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step && update.action == OperationAction::Succeed
+    }));
+}
+
+#[tokio::test]
+async fn test_step_replay_pending_suspends_for_retry() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let step_op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "PENDING",
+        "StepDetails": { "Attempt": 0 },
+    });
+
+    let ctx = make_replay_context(arn, vec![step_op]).await;
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(
+            Some("step"),
+            |_step_ctx| async move {
+                panic!("step_fn should not run in replay");
+            },
+            None::<StepConfig<u32>>,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend pending retry");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::RetryScheduled);
 }
 
 #[tokio::test]

@@ -58,6 +58,33 @@ async fn test_wait_replay_failed_returns_error() {
 }
 
 #[tokio::test]
+async fn test_wait_replay_started_suspends() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let wait_op = json!({
+        "Id": hashed_id,
+        "Type": "WAIT",
+        "Status": "STARTED",
+    });
+
+    let ctx = make_replay_context(arn, vec![wait_op]).await;
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait(Some("wait"), Duration::seconds(5)),
+    )
+    .await;
+    assert!(result.is_err(), "wait should suspend in replay");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::WaitScheduled);
+}
+
+#[tokio::test]
 async fn test_wait_zero_duration_returns_immediately() {
     let arn = "arn:test:durable";
     let ctx = make_replay_context(arn, vec![]).await;
@@ -165,6 +192,74 @@ async fn test_wait_for_callback_replay_failure_returns_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_wait_for_callback_replay_started_suspends() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "STARTED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            |_id, _step_ctx| async move {
+                panic!("submitter should not run in replay");
+                #[allow(unreachable_code)]
+                Ok(())
+            },
+            None,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "callback should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::CallbackPending);
+}
+
+#[tokio::test]
+async fn test_wait_for_callback_replay_non_callback_operation_executes() {
+    let arn = "arn:test:durable";
+    let step_id = "step_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "Status": "SUCCEEDED",
+        "StepDetails": { "Result": "\"ok\"" },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            |_id, _step_ctx| async move { Ok(()) },
+            None,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "callback should suspend");
 }
 
 #[tokio::test]

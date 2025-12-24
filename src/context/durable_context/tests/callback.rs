@@ -104,3 +104,140 @@ async fn test_callback_handle_wait_execution_suspends() {
         .expect("termination should be recorded");
     assert_eq!(termination.reason, TerminationReason::CallbackPending);
 }
+
+#[tokio::test]
+async fn test_callback_handle_wait_replay_success_returns_value() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let payload = serde_json::to_string(&json!({"ok": true})).unwrap();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let value = handle.wait().await.unwrap();
+    assert_eq!(value, json!({"ok": true}));
+}
+
+#[tokio::test]
+async fn test_callback_handle_wait_replay_missing_result_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "SUCCEEDED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let err = handle.wait().await.expect_err("missing result should error");
+    match err {
+        DurableError::Internal(message) => {
+            assert!(message.contains("Missing callback result"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_callback_handle_wait_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "FAILED",
+        "CallbackDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "nope" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let err = handle.wait().await.expect_err("callback should fail");
+    match err {
+        DurableError::CallbackFailed { message, .. } => {
+            assert!(message.contains("nope"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_callback_handle_wait_replay_pending_suspends() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "STARTED",
+        "CallbackDetails": {},
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(StdDuration::from_millis(50), handle.wait()).await;
+    assert!(result.is_err(), "callback wait should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::CallbackPending);
+}
+
+#[tokio::test]
+async fn test_callback_handle_wait_raw_replay_failed_returns_error() {
+    let arn = "arn:test:durable";
+    let step_id = "callback_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CALLBACK",
+        "Status": "FAILED",
+        "CallbackDetails": {
+            "Error": { "ErrorType": "Error", "ErrorMessage": "nope" }
+        },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let err = handle.wait_raw().await.expect_err("callback raw should fail");
+    match err {
+        DurableError::CallbackFailed { message, .. } => {
+            assert!(message.contains("nope"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
