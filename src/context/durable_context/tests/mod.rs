@@ -1,4 +1,5 @@
 use super::*;
+use self::helpers::make_execution_context;
 use crate::types::CompletionConfig;
 
 mod callback;
@@ -121,6 +122,31 @@ fn test_map_summary_payload_fields() {
     assert_eq!(payload["failureCount"], 1);
     assert_eq!(payload["completionReason"], "FAILURE_TOLERANCE_EXCEEDED");
     assert_eq!(payload["status"], "FAILED");
+}
+
+#[tokio::test]
+async fn test_durable_context_handle_debug_and_accessors() {
+    let arn = "arn:test:durable";
+    let (ctx, _lambda_service) = make_execution_context(arn).await;
+
+    assert_eq!(ctx.execution_context().durable_execution_arn, arn);
+
+    let debug = format!("{:?}", ctx);
+    assert!(debug.contains("DurableContextHandle"));
+
+    let exec_ctx = ctx.execution_context().clone();
+    let impl_ctx = DurableContextImpl::new(exec_ctx);
+    let impl_debug = format!("{:?}", impl_ctx);
+    assert!(impl_debug.contains("DurableContextImpl"));
+}
+
+#[test]
+fn test_hash_id_matches_checkpoint_manager() {
+    let id = "step_1";
+    assert_eq!(
+        DurableContextImpl::hash_id(id),
+        CheckpointManager::hash_id(id)
+    );
 }
 
 #[test]
