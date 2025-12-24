@@ -1,4 +1,5 @@
 use super::helpers::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[tokio::test]
 async fn test_wait_replay_succeeded_returns_ok() {
@@ -205,4 +206,57 @@ async fn test_wait_for_callback_replay_serdes_failure_terminates() {
     assert_eq!(termination.reason, TerminationReason::SerdesFailed);
     let message = termination.message.unwrap_or_default();
     assert!(message.contains("Deserialization failed"));
+}
+
+#[tokio::test]
+async fn test_wait_for_callback_execution_runs_submitter_and_suspends() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let ran_submitter = Arc::new(AtomicBool::new(false));
+    let ran_submitter_handle = Arc::clone(&ran_submitter);
+
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.wait_for_callback::<serde_json::Value, _, _>(
+            Some("callback"),
+            move |_id, _step_ctx| async move {
+                ran_submitter_handle.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            None,
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "callback should suspend");
+    assert!(
+        ran_submitter.load(Ordering::SeqCst),
+        "submitter should run before suspension"
+    );
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::CallbackPending);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Callback && update.action == OperationAction::Start
+    }));
+    assert!(updates.iter().any(|update| {
+        update.operation_type == OperationType::Step
+            && update.action == OperationAction::Succeed
+            && update.name.as_deref() == Some("submitter")
+    }));
 }

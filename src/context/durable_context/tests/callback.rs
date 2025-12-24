@@ -81,3 +81,26 @@ async fn test_create_callback_replay_defaults_callback_id() {
 
     assert_eq!(handle.callback_id(), format!("{arn}:{hashed_id}"));
 }
+
+#[tokio::test]
+async fn test_callback_handle_wait_execution_suspends() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(StdDuration::from_millis(50), handle.wait()).await;
+    assert!(result.is_err(), "callback wait should suspend");
+
+    let termination = ctx
+        .execution_context()
+        .termination_manager
+        .get_termination_result()
+        .expect("termination should be recorded");
+    assert_eq!(termination.reason, TerminationReason::CallbackPending);
+}
