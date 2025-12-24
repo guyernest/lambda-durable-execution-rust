@@ -61,6 +61,10 @@ async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
 
+    ctx.execution_context()
+        .set_parent_id(Some("parent-context".to_string()))
+        .await;
+
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 
@@ -85,9 +89,13 @@ async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
         .into_iter()
         .flat_map(|call| call.updates)
         .collect();
-    assert!(updates.iter().any(|update| {
-        update.operation_type == OperationType::Context && update.action == OperationAction::Fail
-    }));
+    let fail = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context && update.action == OperationAction::Fail
+        })
+        .expect("fail update");
+    assert_eq!(fail.parent_id.as_deref(), Some("parent-context"));
 }
 
 #[tokio::test]

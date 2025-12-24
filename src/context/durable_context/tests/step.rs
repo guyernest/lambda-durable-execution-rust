@@ -14,6 +14,19 @@ impl RetryStrategy for AlwaysRetry {
     }
 }
 
+#[derive(Debug)]
+struct ImmediateRetry;
+
+impl RetryStrategy for ImmediateRetry {
+    fn should_retry(
+        &self,
+        _error: &(dyn std::error::Error + Send + Sync),
+        _attempts_made: u32,
+    ) -> RetryDecision {
+        RetryDecision::retry_immediately()
+    }
+}
+
 #[tokio::test]
 async fn test_step_replay_returns_cached_result() {
     let arn = "arn:test:durable";
@@ -47,6 +60,10 @@ async fn test_step_execution_success_checkpoints_succeed() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
 
+    ctx.execution_context()
+        .set_parent_id(Some("parent-step".to_string()))
+        .await;
+
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 
@@ -66,15 +83,21 @@ async fn test_step_execution_success_checkpoints_succeed() {
         .into_iter()
         .flat_map(|call| call.updates)
         .collect();
-    assert!(updates.iter().any(|update| {
-        update.operation_type == OperationType::Step && update.action == OperationAction::Succeed
-    }));
+    let succeed = updates
+        .iter()
+        .find(|update| update.operation_type == OperationType::Step && update.action == OperationAction::Succeed)
+        .expect("succeed update");
+    assert_eq!(succeed.parent_id.as_deref(), Some("parent-step"));
 }
 
 #[tokio::test]
 async fn test_step_execution_failure_no_retry_checkpoints_fail() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-step".to_string()))
+        .await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
@@ -108,9 +131,11 @@ async fn test_step_execution_failure_no_retry_checkpoints_fail() {
         .into_iter()
         .flat_map(|call| call.updates)
         .collect();
-    assert!(updates.iter().any(|update| {
-        update.operation_type == OperationType::Step && update.action == OperationAction::Fail
-    }));
+    let fail = updates
+        .iter()
+        .find(|update| update.operation_type == OperationType::Step && update.action == OperationAction::Fail)
+        .expect("fail update");
+    assert_eq!(fail.parent_id.as_deref(), Some("parent-step"));
 }
 
 #[tokio::test]
@@ -170,6 +195,47 @@ async fn test_step_execution_retry_suspends_and_checkpoints() {
         .as_ref()
         .expect("step options");
     assert_eq!(options.next_attempt_delay_seconds, Some(5));
+}
+
+#[tokio::test]
+async fn test_step_execution_retry_uses_default_delay() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let config = StepConfig::<u32>::new().with_retry_strategy(Arc::new(ImmediateRetry));
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.step(
+            Some("step"),
+            |_step_ctx| async move {
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+                ))
+            },
+            Some(config),
+        ),
+    )
+    .await;
+
+    assert!(result.is_err(), "step should suspend for retry");
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let retry_update = updates
+        .iter()
+        .find(|update| update.action == OperationAction::Retry)
+        .expect("retry update");
+    let options = retry_update
+        .step_options
+        .as_ref()
+        .expect("step options");
+    assert_eq!(options.next_attempt_delay_seconds, Some(1));
 }
 
 #[tokio::test]

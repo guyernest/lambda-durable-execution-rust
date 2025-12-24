@@ -393,3 +393,36 @@ async fn test_wait_for_condition_execution_stop_without_payload() {
         .expect("succeed update");
     assert!(succeed_update.payload.is_none());
 }
+
+#[tokio::test]
+async fn test_wait_for_condition_execution_missing_step_details_uses_initial_state() {
+    let arn = "arn:test:durable";
+    let step_id = "wait_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "STEP",
+        "SubType": "WaitForCondition",
+        "Status": "STARTED",
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
+    let config = WaitConditionConfig::new(
+        0u32,
+        Arc::new(|_state: &u32, _attempt: u32| WaitConditionDecision::Stop),
+    );
+
+    let value = ctx
+        .wait_for_condition(
+            Some("wait"),
+            |state, _step_ctx| async move { Ok(state + 2) },
+            config,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(value, 2u32);
+}
