@@ -8,7 +8,7 @@ It is **not** an official AWS project. The API and behavior are heavily inspired
 
 - **Experimental**: APIs may change and edge cases are still being explored.
 - **Compatibility-first**: the goal is to match the Durable Execution service semantics and the official SDK behavior where practical.
-- **MSRV**: Rust 1.82 (edition 2021).
+- **MSRV**: Rust 1.88 (edition 2021).
 
 ## What this SDK provides
 

@@ -64,7 +64,7 @@ where
                         let branch_name = branch
                             .name
                             .clone()
-                            .unwrap_or_else(|| format!("{}-branch-{}", base, index));
+                            .unwrap_or_else(|| format!("{base}-branch-{index}"));
                         let _ = execution_ctx.next_operation_id(Some(&branch_name));
                     }
 
@@ -98,7 +98,7 @@ where
                     let branch_name = branch
                         .name
                         .clone()
-                        .unwrap_or_else(|| format!("{}-branch-{}", base, index));
+                        .unwrap_or_else(|| format!("{base}-branch-{index}"));
 
                     let child_step_id = execution_ctx.next_operation_id(Some(&branch_name));
                     let child_hashed_id = DurableContextImpl::hash_id(&child_step_id);

@@ -48,7 +48,7 @@ where
         config.mode_aware_logging,
     )
     .await
-    .map_err(|e| LambdaError::from(format!("Failed to initialize context: {}", e)))?;
+    .map_err(|e| LambdaError::from(format!("Failed to initialize context: {e}")))?;
     let termination_manager = Arc::clone(&execution_ctx.termination_manager);
     let checkpoint_manager = Arc::clone(&execution_ctx.checkpoint_manager);
 
@@ -81,7 +81,7 @@ where
     };
 
     let event: E = serde_json::from_str(&input_payload)
-        .map_err(|e| LambdaError::from(format!("Failed to deserialize input: {}", e)))?;
+        .map_err(|e| LambdaError::from(format!("Failed to deserialize input: {e}")))?;
 
     // Create durable context handle
     let durable_ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(execution_ctx)));
@@ -114,7 +114,7 @@ where
             info!("Handler completed successfully");
 
             let output_payload = serde_json::to_string(&response)
-                .map_err(|e| LambdaError::from(format!("Failed to serialize output: {}", e)))?;
+                .map_err(|e| LambdaError::from(format!("Failed to serialize output: {e}")))?;
 
             // If response is too large to return, checkpoint it and return an empty Result.
             if output_payload.len() > LAMBDA_RESPONSE_SIZE_LIMIT {
@@ -133,14 +133,14 @@ where
                     .payload(&output_payload)
                     .build()
                     .map_err(|e| {
-                        LambdaError::from(format!("Failed to build large-result update: {}", e))
+                        LambdaError::from(format!("Failed to build large-result update: {e}"))
                     })?;
 
                 checkpoint_manager
                     .checkpoint(step_id, update)
                     .await
                     .map_err(|e| {
-                        LambdaError::from(format!("Failed to checkpoint large result: {}", e))
+                        LambdaError::from(format!("Failed to checkpoint large result: {e}"))
                     })?;
 
                 // Ensure the checkpoint queue drains before returning.

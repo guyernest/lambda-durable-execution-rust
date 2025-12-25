@@ -65,7 +65,7 @@ where
             let base = name.unwrap_or("parallel");
             let branch_name = branch
                 .name
-                .unwrap_or_else(|| format!("{}-branch-{}", base, index));
+                .unwrap_or_else(|| format!("{base}-branch-{index}"));
 
             let child_step_id = inner.execution_ctx.next_operation_id(Some(&branch_name));
             let child_hashed_id = DurableContextImpl::hash_id(&child_step_id);
@@ -96,7 +96,7 @@ where
             break;
         };
         let (index, res) =
-            joined.map_err(|e| DurableError::Internal(format!("Child task join error: {}", e)))?;
+            joined.map_err(|e| DurableError::Internal(format!("Child task join error: {e}")))?;
 
         started_indices.remove(&index);
         completed_count += 1;

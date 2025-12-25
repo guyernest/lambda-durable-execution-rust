@@ -179,8 +179,7 @@ impl Duration {
                     'S' => duration.seconds = num,
                     _ => {
                         return Err(ParseDurationError::InvalidFormat(format!(
-                            "Unknown unit: {}",
-                            c
+                            "Unknown unit: {c}"
                         )))
                     }
                 }
@@ -346,7 +345,9 @@ pub enum ParseDurationError {
 impl fmt::Display for ParseDurationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseDurationError::InvalidFormat(msg) => write!(f, "Invalid duration format: {}", msg),
+            ParseDurationError::InvalidFormat(msg) => {
+                write!(f, "Invalid duration format: {msg}")
+            }
         }
     }
 }

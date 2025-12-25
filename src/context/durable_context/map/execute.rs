@@ -148,7 +148,7 @@ where
             break;
         };
         let (index, res) =
-            joined.map_err(|e| DurableError::Internal(format!("Child task join error: {}", e)))?;
+            joined.map_err(|e| DurableError::Internal(format!("Child task join error: {e}")))?;
 
         started_indices.remove(&index);
         completed_count += 1;

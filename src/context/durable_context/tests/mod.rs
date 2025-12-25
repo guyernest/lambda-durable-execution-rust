@@ -131,12 +131,12 @@ async fn test_durable_context_handle_debug_and_accessors() {
 
     assert_eq!(ctx.execution_context().durable_execution_arn, arn);
 
-    let debug = format!("{:?}", ctx);
+    let debug = format!("{ctx:?}");
     assert!(debug.contains("DurableContextHandle"));
 
     let exec_ctx = ctx.execution_context().clone();
     let impl_ctx = DurableContextImpl::new(exec_ctx);
-    let impl_debug = format!("{:?}", impl_ctx);
+    let impl_debug = format!("{impl_ctx:?}");
     assert!(impl_debug.contains("DurableContextImpl"));
 }
 

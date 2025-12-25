@@ -748,7 +748,7 @@ mod tests {
             .with_logger(Arc::new(crate::types::TracingLogger))
             .with_mode_aware_logging(false);
 
-        let debug = format!("{:?}", config);
+        let debug = format!("{config:?}");
         assert!(debug.contains("logger: true"));
         assert!(debug.contains("mode_aware_logging: false"));
     }

@@ -3,16 +3,16 @@ name = "lambda-durable-execution-rust"
 description = "Durable Execution SDK for AWS Lambda (Rust) - experimental, community-maintained"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 license = "Apache-2.0"
 keywords = ["lambda", "durable", "workflow", "serverless"]
 categories = ["asynchronous", "web-programming"]
 
 [dependencies]
 # AWS SDK
-aws-sdk-lambda = "1.112.0"
-aws-config = "1"
-aws-smithy-types = "1"
+aws-sdk-lambda = "~1.112.0"
+aws-config = "~1.8.12"
+aws-smithy-types = "~1.3.5"
 
 # Async runtime
 tokio = { version = "1", features = ["full", "sync", "time", "macros"] }

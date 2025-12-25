@@ -13,7 +13,7 @@ impl CheckpointManager {
         let digest = Sha256::digest(id.as_bytes());
         let mut hex = String::with_capacity(32);
         for byte in digest.iter().take(16) {
-            let _ = write!(hex, "{:02x}", byte);
+            let _ = write!(hex, "{byte:02x}");
         }
         hex
     }

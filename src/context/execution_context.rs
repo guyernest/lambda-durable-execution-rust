@@ -170,8 +170,8 @@ impl ExecutionContext {
     pub fn next_operation_id(&self, name: Option<&str>) -> String {
         let counter = self.operation_counter.fetch_add(1, Ordering::SeqCst);
         match name {
-            Some(n) => format!("{}_{}", n, counter),
-            None => format!("op_{}", counter),
+            Some(n) => format!("{n}_{counter}"),
+            None => format!("op_{counter}"),
         }
     }
 

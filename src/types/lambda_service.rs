@@ -426,7 +426,7 @@ impl LambdaService for RealLambdaService {
                 let is_recoverable = is_recoverable_error(&e);
                 let debug = format!("{e:?}");
                 DurableError::checkpoint_failed(
-                    format!("Failed to checkpoint: {}", debug),
+                    format!("Failed to checkpoint: {debug}"),
                     is_recoverable,
                     Some(e),
                 )
@@ -636,7 +636,7 @@ fn to_sdk_operation_update(
             b = b.tenant_id(tenant_id);
         }
         let opts = b.build().map_err(|e| {
-            DurableError::Internal(format!("Failed to build chained invoke options: {}", e))
+            DurableError::Internal(format!("Failed to build chained invoke options: {e}"))
         })?;
         builder.chained_invoke_options(opts)
     } else {
@@ -645,7 +645,7 @@ fn to_sdk_operation_update(
 
     builder
         .build()
-        .map_err(|e| DurableError::Internal(format!("Failed to build operation update: {}", e)))
+        .map_err(|e| DurableError::Internal(format!("Failed to build operation update: {e}")))
 }
 
 fn to_sdk_operation_type(op_type: OperationType) -> aws_sdk_lambda::types::OperationType {

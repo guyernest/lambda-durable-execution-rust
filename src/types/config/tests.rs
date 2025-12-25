@@ -59,7 +59,7 @@ fn test_callback_config_clone_and_debug() {
     assert!(cloned.retry_strategy.is_some());
     assert!(cloned.serdes.is_some());
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("retry_strategy: true"));
     assert!(debug.contains("serdes: true"));
 }
@@ -80,7 +80,7 @@ fn test_invoke_config_builder_and_clone() {
     assert!(cloned.result_serdes.is_some());
     assert_eq!(cloned.tenant_id.as_deref(), Some("tenant-1"));
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("tenant_id"));
 }
 
@@ -93,7 +93,7 @@ fn test_child_context_config_builder() {
     assert_eq!(config.sub_type.as_deref(), Some("child"));
     assert!(config.serdes.is_some());
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("sub_type: Some(\"child\")"));
     assert!(debug.contains("serdes: true"));
 }
@@ -131,7 +131,7 @@ fn test_parallel_config_builder() {
     assert!(config.serdes.is_some());
     assert!(config.item_serdes.is_some());
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("item_serdes: true"));
 }
 
@@ -161,7 +161,7 @@ fn test_map_config_builder_and_clone() {
     assert!(cloned.item_serdes.is_some());
     assert_eq!(cloned.completion_config.min_successful, Some(1));
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("item_namer: true"));
 }
 
@@ -185,7 +185,7 @@ fn test_wait_condition_config_builder() {
     assert_eq!(config.max_attempts, Some(3));
     assert!(config.serdes.is_some());
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("max_attempts: Some(3)"));
 }
 
@@ -205,7 +205,7 @@ fn test_step_config_serdes_and_debug() {
 
     assert!(config.serdes.is_some());
 
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(debug.contains("AtMostOncePerRetry"));
     assert!(debug.contains("serdes: true"));
 }
