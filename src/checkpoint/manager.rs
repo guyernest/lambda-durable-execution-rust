@@ -17,6 +17,10 @@ mod lifecycle;
 mod queue;
 
 /// Maximum payload size for a checkpoint batch (750KB).
+///
+/// This is a conservative batching limit aligned with the JS/Python SDKs and is
+/// not an AWS-documented service quota. It helps avoid oversized checkpoint
+/// requests once JSON overhead is included.
 const MAX_PAYLOAD_SIZE: usize = 750 * 1024;
 
 /// Cooldown period before termination to ensure queue completion.
