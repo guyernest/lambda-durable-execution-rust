@@ -25,17 +25,20 @@ This document explains the internal architecture of the Lambda Durable Execution
 
 The SDK enables Lambda functions to execute long-running workflows by checkpointing state to an AWS control plane. When a Lambda needs to wait (for time, callbacks, or chained invocations), it suspends and the control plane re-invokes it later with the updated state.
 
+> [!IMPORTANT]
+> Examples in this document are illustrative. Actual costs will depend on traffic patterns and configuration.
+
 ```mermaid
 flowchart TB
     Handler["<b>User's Durable Function</b><br/>async fn handler(event: E, ctx: DurableContextHandle) -> Result&lt;R&gt;"]
 
-    Runtime["<b>Runtime Handler</b> (src/runtime/handler/)<br/>• Parse DurableExecutionInvocationInput<br/>• Set up ExecutionContext<br/>• Race handler against termination<br/>• Return DurableExecutionInvocationOutput"]
+    Runtime["<b>Runtime Handler</b> (src/runtime/handler/)<br/>- Parse DurableExecutionInvocationInput<br/>- Set up ExecutionContext<br/>- Race handler against termination<br/>- Return DurableExecutionInvocationOutput"]
 
     CM["<b>CheckpointManager</b><br/>Batches updates, calls Lambda API, tracks lifecycle"]
     TM["<b>TerminationManager</b><br/>Watch channel, termination reasons"]
     EC["<b>ExecutionContext</b><br/>Operation IDs, step data, parent context"]
 
-    ControlPlane["<b>AWS Durable Execution Control Plane</b><br/>• Stores operation history<br/>• Manages checkpoint tokens<br/>• Invokes chained Lambdas<br/>• Schedules wait timers<br/>• Routes external callbacks<br/>• Re-invokes Lambda with updated state"]
+    ControlPlane["<b>AWS Durable Execution Control Plane</b><br/>- Stores operation history<br/>- Manages checkpoint tokens<br/>- Invokes chained Lambdas<br/>- Schedules wait timers<br/>- Routes external callbacks<br/>- Re-invokes Lambda with updated state"]
 
     Handler --> Runtime
     Runtime --> CM
@@ -59,7 +62,7 @@ flowchart TB
 
 4. Each operation:
    - Generates a deterministic ID (hashed from operation name/sequence)
-   - Checks if result exists in replay data (it won't on first run)
+   - Checks if result exists in replay data (it will not on first run)
    - Executes the operation
    - Checkpoints the result to the control plane
 
@@ -188,7 +191,7 @@ Shared state for a single Lambda invocation:
 - `lambda_service`: AWS Lambda API client
 - `checkpoint_manager`: For persisting state
 - `termination_manager`: For signaling suspension
-- `step_data`: HashMap of hashed operation ID → Operation (replay data)
+- `step_data`: HashMap of hashed operation ID -> Operation (replay data)
 - `mode`: `Replay` or `Execution`
 - `operation_counter`: AtomicU64 for generating unique operation IDs
 - `current_parent_id`: Current parent for child context hierarchy
@@ -603,11 +606,11 @@ let final_state = ctx
 Two additional operation types:
 
 - **Context**: Used for grouping related operations. Created by:
-  - `run_in_child_context` → `sub_type = "RunInChildContext"`
-  - `parallel`/`parallel_named` parent → `sub_type = "Parallel"`
-  - `parallel` branches → `sub_type = "ParallelBranch"`
-  - `map` parent → `sub_type = "Map"`
-  - `map` items → `sub_type = "MapItem"`
+  - `run_in_child_context` -> `sub_type = "RunInChildContext"`
+  - `parallel`/`parallel_named` parent -> `sub_type = "Parallel"`
+  - `parallel` branches -> `sub_type = "ParallelBranch"`
+  - `map` parent -> `sub_type = "Map"`
+  - `map` items -> `sub_type = "MapItem"`
 
   Context operations include `ContextDetails` with a `ReplayChildren` boolean field that controls whether child operations should be replayed.
 
@@ -804,95 +807,95 @@ pub enum DurableError {
 
 Certain errors trigger immediate termination:
 
-1. **Checkpoint failure** → `TerminationReason::CheckpointFailed` → Lambda error
-2. **Serialization failure** → `TerminationReason::SerdesFailed` → Lambda error
-3. **Context validation** → `TerminationReason::ContextValidationError` → Failed output
+1. **Checkpoint failure** -> `TerminationReason::CheckpointFailed` -> Lambda error
+2. **Serialization failure** -> `TerminationReason::SerdesFailed` -> Lambda error
+3. **Context validation** -> `TerminationReason::ContextValidationError` -> Failed output
 
 ## Module Structure
 
 ```
 src/
-├── lib.rs                     # Public API, prelude
-├── context/
-│   ├── mod.rs
-│   ├── execution_context.rs   # Shared invocation state
-│   ├── step_context.rs        # StepContext for step closures
-│   └── durable_context/
-│       ├── mod.rs             # DurableContextHandle, DurableContextImpl, CallbackHandle
-│       ├── batch.rs           # Batch result building helpers
-│       ├── serdes.rs          # Serialization helpers
-│       ├── step.rs            # ctx.step() - delegates to step/
-│       ├── step/
-│       │   ├── execute.rs     # Step execution logic
-│       │   └── replay.rs      # Step replay logic
-│       ├── wait.rs            # ctx.wait() - delegates to wait/
-│       ├── wait/
-│       │   └── execute.rs
-│       ├── wait_condition.rs  # ctx.wait_for_condition()
-│       ├── wait_condition/
-│       │   ├── execute.rs
-│       │   └── replay.rs
-│       ├── callback.rs        # ctx.wait_for_callback(), ctx.create_callback()
-│       ├── callback/
-│       │   ├── execute.rs
-│       │   └── replay.rs
-│       ├── invoke.rs          # ctx.invoke()
-│       ├── invoke/
-│       │   ├── execute.rs
-│       │   └── replay.rs
-│       ├── parallel.rs        # ctx.parallel(), ctx.parallel_named()
-│       ├── parallel/
-│       │   ├── execute.rs
-│       │   └── replay.rs
-│       ├── map.rs             # ctx.map()
-│       ├── map/
-│       │   ├── execute.rs
-│       │   └── replay.rs
-│       ├── child.rs           # ctx.run_in_child_context()
-│       └── child/
-│           ├── execute.rs
-│           └── replay.rs
-├── checkpoint/
-│   ├── mod.rs
-│   ├── manager.rs             # CheckpointManager (main file, includes submodules)
-│   └── manager/
-│       ├── coalesce.rs        # Update coalescing logic
-│       ├── lifecycle.rs       # Operation lifecycle tracking
-│       ├── queue.rs           # Batch queue processing
-│       └── hash.rs            # ID hashing
-├── termination/
-│   ├── mod.rs
-│   └── manager.rs             # TerminationManager
-├── runtime/
-│   ├── handler.rs             # with_durable_execution_service, durable_handler
-│   └── handler/
-│       └── execute.rs         # Core execution logic
-├── retry/
-│   ├── mod.rs                 # RetryStrategy trait
-│   ├── strategy.rs            # ExponentialBackoff, ConstantDelay, etc.
-│   └── presets.rs             # Common configurations
-├── types/
-│   ├── mod.rs
-│   ├── invocation.rs          # Input/Output types, Operation, OperationStatus
-│   ├── lambda_service.rs      # LambdaService trait, RealLambdaService
-│   ├── batch.rs               # BatchResult, BatchItem, BatchItemStatus
-│   ├── duration.rs            # Duration wrapper
-│   ├── logger.rs              # DurableLogger trait, TracingLogger
-│   ├── serdes.rs              # Serdes trait for custom serialization
-│   └── config/
-│       ├── mod.rs
-│       ├── step.rs            # StepConfig, StepSemantics
-│       ├── callback.rs        # CallbackConfig
-│       ├── invoke.rs          # InvokeConfig
-│       ├── parallel.rs        # ParallelConfig
-│       ├── map.rs             # MapConfig
-│       ├── child.rs           # ChildContextConfig
-│       ├── wait_condition.rs  # WaitConditionConfig, WaitConditionDecision
-│       ├── completion.rs      # CompletionConfig for batch operations
-│       └── durable_execution.rs  # DurableExecutionConfig
-└── error/
-    ├── mod.rs
-    └── types.rs               # DurableError, ErrorObject
+|-- lib.rs                     # Public API, prelude
+|-- context/
+|   |-- mod.rs
+|   |-- execution_context.rs   # Shared invocation state
+|   |-- step_context.rs        # StepContext for step closures
+|   `-- durable_context/
+|       |-- mod.rs             # DurableContextHandle, DurableContextImpl, CallbackHandle
+|       |-- batch.rs           # Batch result building helpers
+|       |-- serdes.rs          # Serialization helpers
+|       |-- step.rs            # ctx.step() - delegates to step/
+|       |-- step/
+|       |   |-- execute.rs     # Step execution logic
+|       |   `-- replay.rs      # Step replay logic
+|       |-- wait.rs            # ctx.wait() - delegates to wait/
+|       |-- wait/
+|       |   `-- execute.rs
+|       |-- wait_condition.rs  # ctx.wait_for_condition()
+|       |-- wait_condition/
+|       |   |-- execute.rs
+|       |   `-- replay.rs
+|       |-- callback.rs        # ctx.wait_for_callback(), ctx.create_callback()
+|       |-- callback/
+|       |   |-- execute.rs
+|       |   `-- replay.rs
+|       |-- invoke.rs          # ctx.invoke()
+|       |-- invoke/
+|       |   |-- execute.rs
+|       |   `-- replay.rs
+|       |-- parallel.rs        # ctx.parallel(), ctx.parallel_named()
+|       |-- parallel/
+|       |   |-- execute.rs
+|       |   `-- replay.rs
+|       |-- map.rs             # ctx.map()
+|       |-- map/
+|       |   |-- execute.rs
+|       |   `-- replay.rs
+|       |-- child.rs           # ctx.run_in_child_context()
+|       `-- child/
+|           |-- execute.rs
+|           `-- replay.rs
+|-- checkpoint/
+|   |-- mod.rs
+|   |-- manager.rs             # CheckpointManager (main file, includes submodules)
+|   `-- manager/
+|       |-- coalesce.rs        # Update coalescing logic
+|       |-- lifecycle.rs       # Operation lifecycle tracking
+|       |-- queue.rs           # Batch queue processing
+|       `-- hash.rs            # ID hashing
+|-- termination/
+|   |-- mod.rs
+|   `-- manager.rs             # TerminationManager
+|-- runtime/
+|   |-- handler.rs             # with_durable_execution_service, durable_handler
+|   `-- handler/
+|       `-- execute.rs         # Core execution logic
+|-- retry/
+|   |-- mod.rs                 # RetryStrategy trait
+|   |-- strategy.rs            # ExponentialBackoff, ConstantDelay, etc.
+|   `-- presets.rs             # Common configurations
+|-- types/
+|   |-- mod.rs
+|   |-- invocation.rs          # Input/Output types, Operation, OperationStatus
+|   |-- lambda_service.rs      # LambdaService trait, RealLambdaService
+|   |-- batch.rs               # BatchResult, BatchItem, BatchItemStatus
+|   |-- duration.rs            # Duration wrapper
+|   |-- logger.rs              # DurableLogger trait, TracingLogger
+|   |-- serdes.rs              # Serdes trait for custom serialization
+|   `-- config/
+|       |-- mod.rs
+|       |-- step.rs            # StepConfig, StepSemantics
+|       |-- callback.rs        # CallbackConfig
+|       |-- invoke.rs          # InvokeConfig
+|       |-- parallel.rs        # ParallelConfig
+|       |-- map.rs             # MapConfig
+|       |-- child.rs           # ChildContextConfig
+|       |-- wait_condition.rs  # WaitConditionConfig, WaitConditionDecision
+|       |-- completion.rs      # CompletionConfig for batch operations
+|       `-- durable_execution.rs  # DurableExecutionConfig
+`-- error/
+    |-- mod.rs
+    `-- types.rs               # DurableError, ErrorObject
 ```
 
 ## Quotas and Limits

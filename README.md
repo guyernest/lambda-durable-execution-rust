@@ -1,23 +1,20 @@
 # lambda-durable-execution-rust (experimental)
 
-`lambda-durable-execution-rust` is a community-driven SDK that brings the power of **AWS Lambda Durable Execution** to the Rust ecosystem. It enables developers to build complex, stateful serverless workflows using familiar async Rust patterns, with built-in support for automatic checkpointing, durable timers, parallel execution, and reliable retries—eliminating the need for external orchestration infrastructure.
+lambda-durable-execution-rust is an experimental, community-maintained Rust SDK for AWS Lambda Durable Execution. It provides durable operations for checkpointing, waits, callbacks, invokes, and fan-out patterns.
 
 > [!NOTE]
-> This repository contains an **experimental, community-maintained** Rust SDK for **AWS Lambda Durable Execution** (“durable functions”).
-> It is **not** an official AWS project. The API and behavior are heavily inspired by (and validated against) the official and publicly available Durable Execution SDKs for TypeScript and Python, but this crate is developed independently, and most of the implementation was drafted with the help of AI assistants (see [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md)) and has only been exercised in my own workloads. The official AWS SDK will likely be released in the near future; please consider this crate as a stopgap solution for Rust users who want to experiment with Durable Execution today.
-
-
+> This repository is not an official AWS project. The API follows the public JavaScript and Python SDKs. The implementation is developed independently. Parts of the implementation were drafted with AI assistants (see AGENTS.md and CLAUDE.md) and have been exercised only in the author's workloads. Consider this repository for experimentation. Evaluate production use against requirements.
 
 ## Status / expectations
 
-- **Experimental**: APIs may change and edge cases are still being explored.
-- **Compatibility-first**: the goal is to match the Durable Execution service semantics and the official SDK behavior where practical.
-- **MSRV**: Rust 1.88 (edition 2021).
+- Experimental: APIs may change and edge cases are still being explored.
+- Compatibility-first: The goal is to match Durable Execution service semantics and the official SDK behavior where practical.
+- MSRV: Rust 1.88 (edition 2021).
 
 ## Documentation
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Internal architecture, operation diagrams, and code examples
-- **[examples/](examples/)** - Deployable Lambda examples with SAM template
+- ARCHITECTURE.md - Internal architecture, operation diagrams, and code examples.
+- examples/ - Deployable Lambda examples with SAM template.
 
 ## Quickstart
 
@@ -30,7 +27,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
-Minimal workflow (checkpointed step + durable wait):
+Minimal workflow (checkpointed step and durable wait):
 ```rust,no_run
 use lambda_durable_execution_rust::prelude::*;
 use lambda_durable_execution_rust::runtime::with_durable_execution_service;
@@ -59,16 +56,18 @@ async fn main() -> Result<(), lambda_runtime::Error> {
 }
 ```
 
+These examples are illustrative. Actual costs will depend on traffic patterns and configuration.
+
 ## Durable Operations
 
-The SDK provides the following durable operations, each with automatic checkpointing and replay support. See [ARCHITECTURE.md](ARCHITECTURE.md#operation-types) for detailed diagrams and code examples.
+The SDK provides the following durable operations with checkpointing and replay support. See ARCHITECTURE.md for diagrams and examples.
 
 | Operation | Description | Examples |
 |-----------|-------------|----------|
 | `step` | Checkpointed work units with optional retry | [`hello_world`](examples/src/bin/hello_world/main.rs), [`step_retry`](examples/src/bin/step_retry/main.rs) |
-| `wait` | Suspend without compute cost | [`hello_world`](examples/src/bin/hello_world/main.rs) |
+| `wait` | Suspend without user code execution during the wait | [`hello_world`](examples/src/bin/hello_world/main.rs) |
 | `wait_for_callback` | External system integration (approvals, webhooks) | [`callback_example`](examples/src/bin/callback_example/main.rs), [`wait_for_callback_heartbeat`](examples/src/bin/wait_for_callback_heartbeat/main.rs) |
-| `wait_for_condition` | Poll until condition is satisfied | [`wait_for_condition`](examples/src/bin/wait_for_condition/main.rs) |
+| `wait_for_condition` | Poll until a condition is satisfied | [`wait_for_condition`](examples/src/bin/wait_for_condition/main.rs) |
 | `invoke` | Durable Lambda invocation | [`invoke_caller`](examples/src/bin/invoke_caller/main.rs), [`invoke_target`](examples/src/bin/invoke_target/main.rs) |
 | `parallel` | Concurrent branch execution | [`parallel`](examples/src/bin/parallel/main.rs), [`parallel_first_successful`](examples/src/bin/parallel_first_successful/main.rs) |
 | `parallel_named` | Named concurrent branches | [`parallel_named`](examples/src/bin/parallel_named/main.rs) |
@@ -77,52 +76,52 @@ The SDK provides the following durable operations, each with automatic checkpoin
 
 ## Runtime integration
 
-- `with_durable_execution_service(handler, config)` wraps your handler for the Lambda runtime.
-- `durable_handler(handler)` exposes a builder API and lets you inject a custom Lambda client or service.
-- `DurableExecutionConfig` controls logging, retry policies, and which `LambdaService` implementation is used.
+- `with_durable_execution_service(handler, config)` wraps a handler for the Lambda runtime.
+- `durable_handler(handler)` exposes a builder API and allows a custom Lambda client or service.
+- `DurableExecutionConfig` controls logging, retry policies, and the LambdaService implementation.
 
 The runtime automatically:
 - parses the Durable Execution invocation payload
 - initializes the execution context
 - checkpoints results and failures
-- suspends on waits/callbacks/retries and returns `Pending`
+- suspends on waits, callbacks, and retries and returns `PENDING`
 
-Large handler responses that exceed the Lambda response size limit are checkpointed and returned with an empty payload; the execution result can be reconstructed from the checkpoint state.
+Large handler responses that exceed the Lambda response size limit are checkpointed. The response payload is empty. The result can be reconstructed from checkpoint state.
 
 ## Design notes
 
-- **Replay safety**: step bodies should be deterministic and side‑effect‑free; use durable operations to express side effects.
-- **ID hashing**: operation IDs are SHA‑256 hashed and truncated to 128 bits (32 hex chars). This avoids MD5 (often flagged by scanners) while keeping IDs short; the JS SDK uses MD5‑16 and the Python SDK uses BLAKE2b‑64.
-- **Serdes**: operations can use custom serializers for individual items and/or full batch results (`map`/`parallel`).
+- Replay safety: Step bodies should be deterministic and side-effect-free. Use durable operations to express side effects.
+- ID hashing: Operation IDs are SHA-256 hashed and truncated to 128 bits (32 hex chars). This avoids MD5 and keeps IDs short. The JS SDK uses MD5-16 and the Python SDK uses BLAKE2b-64.
+- Serdes: Operations can use custom serializers for individual items or full batch results (`map` and `parallel`).
 
 ## Project layout
 
-- `Cargo.toml`: SDK crate (`lambda-durable-execution-rust`)
+- `Cargo.toml`: SDK crate (lambda-durable-execution-rust)
 - `src/`: core SDK source
 - `examples/`: separate Cargo package with deployable Lambda examples
   - `examples/src/bin/`: example handlers
   - `examples/template.yaml`: SAM template
   - `examples/scripts/`: validation tooling
-  - `examples/diagrams/`: generated Mermaid/SVG diagrams
+  - `examples/diagrams/`: generated Mermaid and Markdown diagrams
 
 ## Module organization
 
 Top-level modules:
-- `context`: user-facing durable APIs (`DurableContextHandle`, `StepContext`, `BatchResult`, etc.)
+- `context`: user-facing durable APIs (`DurableContextHandle`, `StepContext`, `BatchResult`, and more)
 - `checkpoint`: checkpoint queueing and lifecycle management
-- `termination`: termination signaling (wait/callback/retry)
+- `termination`: termination signaling (wait, callback, retry)
 - `retry`: retry strategies and presets
 - `types`: configuration and SDK wire types
 - `runtime`: handler wrappers and execution pipeline
 - `error`: SDK error taxonomy
 
 Within `context/durable_context`, each durable operation is split into focused submodules:
-- `{step, wait, wait_condition, callback, invoke, child, map, parallel}`
+- `step`, `wait`, `wait_condition`, `callback`, `invoke`, `child`, `map`, `parallel`
 - each operation has `execute` and `replay` logic separated for clarity and testability
 
 Unit tests live alongside their modules in `#[cfg(test)]` blocks and the `context/durable_context/tests/` helpers.
 
-## Build & test
+## Build and test
 
 ```bash
 cargo fmt
@@ -131,7 +130,7 @@ cargo test
 # Lint
 cargo clippy --all-targets --all-features -D warnings
 
-# Run the examples package tests/build checks
+# Run the examples package tests and build checks
 cargo test --manifest-path examples/Cargo.toml --all-targets
 
 # Coverage (requires llvm-cov)
@@ -140,7 +139,7 @@ cargo llvm-cov --all-features --summary-only
 
 ## Test utilities (feature-gated)
 
-Mocks for the Lambda Durable Execution API are available behind the `testutils` feature (or automatically in this crate’s own tests):
+Mocks for the Lambda Durable Execution API are available behind the `testutils` feature (or automatically in this crate's own tests):
 
 ```toml
 [dev-dependencies]
@@ -158,27 +157,27 @@ lambda-durable-execution-rust = { version = "0.1", features = ["testutils"] }
 }
 ```
 
-The mock service queues expected responses and records calls, letting you exercise checkpoint and replay flows without AWS.
+The mock service queues expected responses and records calls. This allows testing of checkpoint and replay flows without AWS.
 
 ## Run examples on AWS (SAM)
 
 See `examples/README.md` for:
 - deploying `examples/template.yaml` with SAM
 - validating all examples with `examples/scripts/validate.py`
-- generated Mermaid/SVG diagrams per example
+- generated Mermaid and Markdown diagrams per example
 
 ## References
 
 ### AWS Documentation
 
-For the official AWS Lambda Durable Execution service documentation, see:
-- [Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html) - Overview and concepts
-- [Durable execution SDK](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution-sdk.html) - SDK usage guide
-- [Configuration](https://docs.aws.amazon.com/lambda/latest/dg/durable-configuration.html) - Timeouts and retention
-- [Best practices](https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html) - Determinism and idempotency
+For the official AWS Lambda Durable Execution service documentation:
+- https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html (overview and concepts)
+- https://docs.aws.amazon.com/lambda/latest/dg/durable-execution-sdk.html (SDK usage guide)
+- https://docs.aws.amazon.com/lambda/latest/dg/durable-configuration.html (timeouts and retention)
+- https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html (determinism and idempotency)
 
 ### Official SDKs
 
-This project is based on the public Durable Execution SDK design and validated against the official SDKs where possible:
-- [aws/aws-durable-execution-sdk-js](https://github.com/aws/aws-durable-execution-sdk-js) - Node.js/TypeScript SDK
-- [aws/aws-durable-execution-sdk-python](https://github.com/aws/aws-durable-execution-sdk-python) - Python SDK
+This repository follows the public Durable Execution SDK design and is validated against the official SDKs where practical:
+- https://github.com/aws/aws-durable-execution-sdk-js (Node.js and TypeScript SDK)
+- https://github.com/aws/aws-durable-execution-sdk-python (Python SDK)
