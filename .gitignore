@@ -19,8 +19,6 @@ __pycache__/
 *.pyc
 
 # internal docs
-CLAUDE.md
-AGENTS.md
 .docs/
 .claude/
 

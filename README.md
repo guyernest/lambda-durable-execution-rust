@@ -1,8 +1,12 @@
 # lambda-durable-execution-rust (experimental)
 
-> [!WARNING] 
+`lambda-durable-execution-rust` is a community-driven SDK that brings the power of **AWS Lambda Durable Execution** to the Rust ecosystem. It enables developers to build complex, stateful serverless workflows using familiar async Rust patterns, with built-in support for automatic checkpointing, durable timers, parallel execution, and reliable retries—eliminating the need for external orchestration infrastructure.
+
+> [!NOTE]
 > This repository contains an **experimental, community-maintained** Rust SDK for **AWS Lambda Durable Execution** (“durable functions”).
-> It is **not** an official AWS project. The API and behavior are heavily inspired by (and validated against) the official and publicly available Durable Execution SDKs for Typescript and Python, but this crate is developed independently, and most of the implementation were drafted with the help of an AI assistant and have only been exercised in my own workloads.
+> It is **not** an official AWS project. The API and behavior are heavily inspired by (and validated against) the official and publicly available Durable Execution SDKs for TypeScript and Python, but this crate is developed independently, and most of the implementation was drafted with the help of AI assistants (see [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md)) and has only been exercised in my own workloads. The official AWS SDK will likely be released in the near future; please consider this crate as a stopgap solution for Rust users who want to experiment with Durable Execution today.
+
+
 
 ## Status / expectations
 
