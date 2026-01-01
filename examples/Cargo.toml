@@ -45,6 +45,10 @@ name = "parallel"
 path = "src/bin/parallel/main.rs"
 
 [[bin]]
+name = "parallel_named"
+path = "src/bin/parallel_named/main.rs"
+
+[[bin]]
 name = "parallel_first_successful"
 path = "src/bin/parallel_first_successful/main.rs"
 

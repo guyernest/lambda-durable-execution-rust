@@ -10,17 +10,10 @@ It is **not** an official AWS project. The API and behavior are heavily inspired
 - **Compatibility-first**: the goal is to match the Durable Execution service semantics and the official SDK behavior where practical.
 - **MSRV**: Rust 1.88 (edition 2021).
 
-## What this SDK provides
+## Documentation
 
-The core crate, `lambda-durable-execution-rust`, helps you build replay-safe Lambda workflows by checkpointing durable operations:
-
-- `step(...)`: checkpointed work units (replay returns recorded results)
-- `wait(...)`: suspend/resume without paying for idle compute
-- `wait_for_callback(...)`: human/external-system approval flows
-- `wait_for_condition(...)`: poll until a predicate is true
-- `invoke(...)`: durable invocation of another Lambda function
-- `parallel(...)` / `map(...)`: fan-out/fan-in patterns with bounded concurrency
-- `run_in_child_context(...)`: structured grouping of operations
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Internal architecture, operation diagrams, and code examples
+- **[examples/](examples/)** - Deployable Lambda examples with SAM template
 
 ## Quickstart
 
@@ -62,41 +55,21 @@ async fn main() -> Result<(), lambda_runtime::Error> {
 }
 ```
 
-Wait for an external callback (approval-style flow):
-```rust,no_run
-use lambda_durable_execution_rust::prelude::*;
+## Durable Operations
 
-async fn handler(_event: serde_json::Value, ctx: DurableContextHandle) -> DurableResult<String> {
-    let cfg = CallbackConfig::<String>::new().with_timeout(Duration::hours(24));
-    let result: String = ctx.wait_for_callback(
-        Some("wait-approval"),
-        |callback_id, step_ctx| async move {
-            step_ctx.info(&format!("Send callback id to external system: {callback_id}"));
-            Ok(())
-        },
-        Some(cfg),
-    ).await?;
-    Ok(result)
-}
-```
+The SDK provides the following durable operations, each with automatic checkpointing and replay support. See [ARCHITECTURE.md](ARCHITECTURE.md#operation-types) for detailed diagrams and code examples.
 
-Durably invoke another Lambda:
-```rust,no_run
-use lambda_durable_execution_rust::prelude::*;
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize)]
-struct TargetEvent { value: i32 }
-#[derive(Deserialize)]
-struct TargetResponse { doubled: i32 }
-
-async fn handler(_event: serde_json::Value, ctx: DurableContextHandle) -> DurableResult<i32> {
-    let target_arn = std::env::var("INVOKE_TARGET_FUNCTION")
-        .map_err(|_| DurableError::InvalidConfiguration { message: "Missing INVOKE_TARGET_FUNCTION".into() })?;
-    let out: TargetResponse = ctx.invoke(Some("invoke-target"), &target_arn, Some(TargetEvent { value: 21 })).await?;
-    Ok(out.doubled)
-}
-```
+| Operation | Description | Examples |
+|-----------|-------------|----------|
+| `step` | Checkpointed work units with optional retry | [`hello_world`](examples/src/bin/hello_world/main.rs), [`step_retry`](examples/src/bin/step_retry/main.rs) |
+| `wait` | Suspend without compute cost | [`hello_world`](examples/src/bin/hello_world/main.rs) |
+| `wait_for_callback` | External system integration (approvals, webhooks) | [`callback_example`](examples/src/bin/callback_example/main.rs), [`wait_for_callback_heartbeat`](examples/src/bin/wait_for_callback_heartbeat/main.rs) |
+| `wait_for_condition` | Poll until condition is satisfied | [`wait_for_condition`](examples/src/bin/wait_for_condition/main.rs) |
+| `invoke` | Durable Lambda invocation | [`invoke_caller`](examples/src/bin/invoke_caller/main.rs), [`invoke_target`](examples/src/bin/invoke_target/main.rs) |
+| `parallel` | Concurrent branch execution | [`parallel`](examples/src/bin/parallel/main.rs), [`parallel_first_successful`](examples/src/bin/parallel_first_successful/main.rs) |
+| `parallel_named` | Named concurrent branches | [`parallel_named`](examples/src/bin/parallel_named/main.rs) |
+| `map` | Process items concurrently | [`map_operations`](examples/src/bin/map_operations/main.rs), [`map_with_failure_tolerance`](examples/src/bin/map_with_failure_tolerance/main.rs) |
+| `run_in_child_context` | Grouped operations | [`child_context`](examples/src/bin/child_context/main.rs), [`block_example`](examples/src/bin/block_example/main.rs) |
 
 ## Runtime integration
 
@@ -192,6 +165,16 @@ See `examples/README.md` for:
 
 ## References
 
+### AWS Documentation
+
+For the official AWS Lambda Durable Execution service documentation, see:
+- [Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html) - Overview and concepts
+- [Durable execution SDK](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution-sdk.html) - SDK usage guide
+- [Configuration](https://docs.aws.amazon.com/lambda/latest/dg/durable-configuration.html) - Timeouts and retention
+- [Best practices](https://docs.aws.amazon.com/lambda/latest/dg/durable-best-practices.html) - Determinism and idempotency
+
+### Official SDKs
+
 This project is based on the public Durable Execution SDK design and validated against the official SDKs where possible:
-- Node.js/TypeScript SDK (local sibling clone): `../aws-durable-execution-sdk-js`
-- Python SDK (local sibling clone): `../aws-durable-execution-sdk-python`
+- [aws/aws-durable-execution-sdk-js](https://github.com/aws/aws-durable-execution-sdk-js) - Node.js/TypeScript SDK
+- [aws/aws-durable-execution-sdk-python](https://github.com/aws/aws-durable-execution-sdk-python) - Python SDK

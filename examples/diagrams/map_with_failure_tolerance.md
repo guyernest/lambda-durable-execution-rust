@@ -8,7 +8,7 @@ Source: `../src/bin/map_with_failure_tolerance/main.rs`
 
 ```mermaid
 flowchart TD
-    n_e0d20fb4_5f26_30_start([Start])
+    n_6ca910bd_d215_3a_start([Start])
     subgraph n_58baf0e7581a1145["map_with_tolerance"]
     end
     subgraph n_4acb42a0e20b3fcd["map_with_tolerance-item-0"]
@@ -41,6 +41,6 @@ flowchart TD
     subgraph n_c64b296f14a7b458["map_with_tolerance-item-9"]
         n_1aca5aa465efd860_Step_27["item_9"]
     end
-    n_e0d20fb4_5f26_30_end([Success])
-    n_e0d20fb4_5f26_30_start --> n_58baf0e7581a1145 --> n_4acb42a0e20b3fcd --> n_95c1fa8ae5503850 --> n_071fb189b0a32300 --> n_d1d754f4ae4fc53d --> n_c64fe9474ac8b13c --> n_ca6fc34324eae769 --> n_fab99a172429ef77 --> n_d5f27fe3ea02dc5f --> n_d74d7290f0ca8f96 --> n_c64b296f14a7b458 --> n_e0d20fb4_5f26_30_end
+    n_6ca910bd_d215_3a_end([Success])
+    n_6ca910bd_d215_3a_start --> n_58baf0e7581a1145 --> n_4acb42a0e20b3fcd --> n_95c1fa8ae5503850 --> n_071fb189b0a32300 --> n_d1d754f4ae4fc53d --> n_c64fe9474ac8b13c --> n_ca6fc34324eae769 --> n_fab99a172429ef77 --> n_d5f27fe3ea02dc5f --> n_d74d7290f0ca8f96 --> n_c64b296f14a7b458 --> n_6ca910bd_d215_3a_end
 ```

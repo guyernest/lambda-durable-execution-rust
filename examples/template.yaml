@@ -69,6 +69,23 @@ Resources:
                 - lambda:CheckpointDurableExecution
               Resource: "*"
 
+  ParallelNamedExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: parallel_named
+    Properties:
+      CodeUri: .
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+
   ParallelFirstSuccessfulExampleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -304,6 +321,9 @@ Outputs:
   ParallelExampleFunctionArn:
     Description: Parallel example function ARN
     Value: !GetAtt ParallelExampleFunction.Arn
+  ParallelNamedExampleFunctionArn:
+    Description: Parallel named example function ARN
+    Value: !GetAtt ParallelNamedExampleFunction.Arn
   ParallelFirstSuccessfulExampleFunctionArn:
     Description: Parallel first successful example function ARN
     Value: !GetAtt ParallelFirstSuccessfulExampleFunction.Arn

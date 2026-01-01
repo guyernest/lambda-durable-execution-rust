@@ -8,10 +8,11 @@ Source: `../src/bin/hello_world/main.rs`
 
 ```mermaid
 flowchart TD
-    n_51318409_5c52_36_start([Start])
+    n_12f49d03_2094_3c_start([Start])
     n_05461beee7e26b4a_Step_2["calculate-length"]
-    n_3d452b3799674612_Wait_3[/"wait-10s"/]
-    n_3d452b3799674612_Wait_5[/"wait-10s"/]
-    n_51318409_5c52_36_end([Success])
-    n_51318409_5c52_36_start --> n_05461beee7e26b4a_Step_2 --> n_3d452b3799674612_Wait_3 --> n_3d452b3799674612_Wait_5 --> n_51318409_5c52_36_end
+    n_05461beee7e26b4a_Step_3["calculate-length"]
+    n_3d452b3799674612_Wait_4[/"wait-10s"/]
+    n_3d452b3799674612_Wait_6[/"wait-10s"/]
+    n_12f49d03_2094_3c_end([Success])
+    n_12f49d03_2094_3c_start --> n_05461beee7e26b4a_Step_2 --> n_05461beee7e26b4a_Step_3 --> n_3d452b3799674612_Wait_4 --> n_3d452b3799674612_Wait_6 --> n_12f49d03_2094_3c_end
 ```

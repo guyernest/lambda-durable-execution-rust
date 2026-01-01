@@ -8,7 +8,7 @@ Source: `../src/bin/child_context/main.rs`
 
 ```mermaid
 flowchart TD
-    n_fd4c6cf0_9458_38_start([Start])
+    n_ef821840_1aae_35_start([Start])
     subgraph n_a2cb261984cb89d6["batch-processing-context"]
         n_9064db722a7d5a6c_Step_3["process-item-0"]
         n_9064db722a7d5a6c_Step_4["process-item-0"]
@@ -17,6 +17,6 @@ flowchart TD
         n_751f6a019eb9c14d_Step_7["process-item-2"]
         n_751f6a019eb9c14d_Step_8["process-item-2"]
     end
-    n_fd4c6cf0_9458_38_end([Success])
-    n_fd4c6cf0_9458_38_start --> n_a2cb261984cb89d6 --> n_fd4c6cf0_9458_38_end
+    n_ef821840_1aae_35_end([Success])
+    n_ef821840_1aae_35_start --> n_a2cb261984cb89d6 --> n_ef821840_1aae_35_end
 ```

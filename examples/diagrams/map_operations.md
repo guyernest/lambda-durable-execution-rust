@@ -8,7 +8,7 @@ Source: `../src/bin/map_operations/main.rs`
 
 ```mermaid
 flowchart TD
-    n_0b310e0f_b458_3a_start([Start])
+    n_2c92aa32_8b03_3e_start([Start])
     subgraph n_7bdd6441b72db58d["map_operation"]
     end
     subgraph n_47a1a23a26aa4b33["map_operation-item-0"]
@@ -26,6 +26,6 @@ flowchart TD
     subgraph n_23a461cac058646b["map_operation-item-4"]
         n_aa4478b92bf38dab_Step_16["map_item_4"]
     end
-    n_0b310e0f_b458_3a_end([Success])
-    n_0b310e0f_b458_3a_start --> n_7bdd6441b72db58d --> n_47a1a23a26aa4b33 --> n_de1e0ab9cdf321ce --> n_485143bc380459a2 --> n_6231d9a89ea147d7 --> n_23a461cac058646b --> n_0b310e0f_b458_3a_end
+    n_2c92aa32_8b03_3e_end([Success])
+    n_2c92aa32_8b03_3e_start --> n_7bdd6441b72db58d --> n_47a1a23a26aa4b33 --> n_de1e0ab9cdf321ce --> n_485143bc380459a2 --> n_6231d9a89ea147d7 --> n_23a461cac058646b --> n_2c92aa32_8b03_3e_end
 ```

@@ -2,6 +2,25 @@
 
 This document explains the internal architecture of the Lambda Durable Execution Rust SDK.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Execution Lifecycle](#execution-lifecycle)
+- [Core Components](#core-components)
+- [Operation Types](#operation-types)
+  - [Step](#step-srccontextdurable_contextstep)
+  - [Wait](#wait-srccontextdurable_contextwaitrs)
+  - [Callback](#callback-srccontextdurable_contextcallbackrs)
+  - [ChainedInvoke](#chainedinvoke-srccontextdurable_contextinvoke)
+  - [Parallel/Map](#parallelmap-srccontextdurable_contextparallelrs-maprs)
+  - [WaitForCondition](#waitforcondition-srccontextdurable_contextwait_condition)
+  - [Context and Execution Operations](#context-and-execution-operations)
+- [Replay Mechanism](#replay-mechanism)
+- [Checkpoint Protocol](#checkpoint-protocol)
+- [Error Handling](#error-handling)
+- [Module Structure](#module-structure)
+- [Testing](#testing)
+
 ## Overview
 
 The SDK enables Lambda functions to execute long-running workflows by checkpointing state to an AWS control plane. When a Lambda needs to wait (for time, callbacks, or chained invocations), it suspends and the control plane re-invokes it later with the updated state.
@@ -183,7 +202,7 @@ On initialization, if `initial_execution_state.next_marker` is set, the context 
 
 Manages communication with the AWS control plane:
 
-- **Batching**: Queues multiple operations, sends in batches (750KB limit; SDK-parity safeguard, not an AWS-documented quota)
+- **Batching**: Queues multiple operations, sends in batches (750KB SDK batch limit, derived from official JS/Python SDKs; AWS documents 256KB per checkpoint)
 - **Coalescing**: Merges START+SUCCEED for same operation into single update
 - **Lifecycle tracking**: Tracks operation states for termination decisions
 - **Token management**: Updates checkpoint token after each successful call
@@ -223,18 +242,74 @@ When `terminate()` is called:
 
 Executes a closure and checkpoints the result:
 
+**Flow (local control):**
 ```mermaid
 flowchart LR
     Start["START<br/>checkpoint"] --> Execute["Execute<br/>closure"]
     Execute --> Complete["SUCCEED /<br/>FAIL"]
 ```
 
+**Sequence (control plane):**
+```mermaid
+sequenceDiagram
+    participant SDK
+    participant ControlPlane as Control Plane
+
+    SDK->>ControlPlane: checkpoint(Step, START)
+    Note over SDK: AtMostOncePerRetry only. AtLeastOncePerRetry queues START
+    SDK->>SDK: Execute step_fn
+
+    alt Success
+        SDK->>ControlPlane: checkpoint(Step, SUCCEED)
+    else Failure + retry
+        SDK->>ControlPlane: checkpoint(Step, RETRY)
+        Note over SDK: Lambda suspends for delay
+    else Failure + no retry
+        SDK->>ControlPlane: checkpoint(Step, FAIL)
+    end
+```
+
 Supports retry strategies (`ExponentialBackoff`, `ConstantDelay`, etc.) with the `RETRY` action.
+
+**Usage:**
+```rust,ignore
+// Basic step
+let result = ctx
+    .step(Some("fetch-data"), |step_ctx| async move {
+        step_ctx.info("Fetching data from API");
+        Ok(fetch_from_api().await?)
+    }, None)
+    .await?;
+
+// With retry strategy
+let config = StepConfig::new()
+    .with_retry_strategy(Arc::new(ExponentialBackoff::new(3)));
+
+ctx.step(Some("unreliable-call"), |_| async move {
+    Ok(call_flaky_service().await?)
+}, Some(config)).await?;
+```
+
+**Examples:** [`hello_world`](examples/src/bin/hello_world/main.rs), [`step_retry`](examples/src/bin/step_retry/main.rs)
+
+---
 
 ### Wait (`src/context/durable_context/wait.rs`)
 
 Suspends for a duration:
 
+**Flow (local control):**
+```mermaid
+flowchart LR
+    Call["ctx.wait()"] --> Replay{"Replay status?"}
+    Replay -->|Succeeded| Return["Return cached result"]
+    Replay -->|Not completed| Start["checkpoint(Wait, START)"]
+    Start --> Suspend["Terminate invocation"]
+    Suspend --> Resume["Re-invoke after timer"]
+    Resume --> Return
+```
+
+**Sequence (control plane):**
 ```mermaid
 sequenceDiagram
     participant SDK
@@ -247,10 +322,33 @@ sequenceDiagram
     Note over SDK: Replay returns cached result
 ```
 
+**Usage:**
+```rust,ignore
+ctx.wait(Some("wait-1-hour"), Duration::hours(1)).await?;
+```
+
+**Examples:** [`hello_world`](examples/src/bin/hello_world/main.rs)
+
+---
+
 ### Callback (`src/context/durable_context/callback.rs`)
 
 Waits for external system to call back:
 
+**Flow (local control):**
+```mermaid
+flowchart LR
+    Call["ctx.wait_for_callback()"] --> Replay{"Replay status?"}
+    Replay -->|Succeeded| Return["Return cached result"]
+    Replay -->|Failed| Error["Return error"]
+    Replay -->|Not completed| Start["checkpoint(Callback, START)"]
+    Start --> Awaited["mark_awaited + terminate"]
+    Awaited --> External["External completes callback"]
+    External --> Resume["Re-invoke with result"]
+    Resume --> Return
+```
+
+**Sequence (control plane):**
 ```mermaid
 sequenceDiagram
     participant SDK
@@ -267,10 +365,52 @@ sequenceDiagram
     Note over SDK: Replay returns cached result
 ```
 
+**Usage:**
+```rust,ignore
+// Using wait_for_callback with submitter function
+let config = CallbackConfig::<ApprovalDecision>::new()
+    .with_timeout(Duration::hours(24));
+
+let decision: ApprovalDecision = ctx
+    .wait_for_callback(
+        Some("await-approval"),
+        |callback_id, step_ctx| async move {
+            step_ctx.info(&format!("Callback ID: {}", callback_id));
+            send_approval_email(&callback_id).await
+        },
+        Some(config),
+    )
+    .await?;
+
+// Using create_callback for more control
+let handle: CallbackHandle<Result> = ctx.create_callback(Some("payment"), None).await?;
+initiate_payment(handle.callback_id()).await?;
+// Do other work...
+let result = handle.wait().await?;
+```
+
+**Examples:** [`callback_example`](examples/src/bin/callback_example/main.rs), [`wait_for_callback_heartbeat`](examples/src/bin/wait_for_callback_heartbeat/main.rs)
+
+---
+
 ### ChainedInvoke (`src/context/durable_context/invoke/`)
 
 Invokes another Lambda function:
 
+**Flow (local control):**
+```mermaid
+flowchart LR
+    Call["ctx.invoke()"] --> Replay{"Replay status?"}
+    Replay -->|Succeeded| Return["Return cached result"]
+    Replay -->|Failed| Error["Return error"]
+    Replay -->|Not completed| Start["checkpoint(ChainedInvoke, START)"]
+    Start --> Suspend["Terminate invocation"]
+    Suspend --> Invoke["Control plane invokes target"]
+    Invoke --> Resume["Re-invoke with result"]
+    Resume --> Return
+```
+
+**Sequence (control plane):**
 ```mermaid
 sequenceDiagram
     participant SDK
@@ -290,27 +430,130 @@ sequenceDiagram
 
 The SDK does **not** invoke the target directly. It checkpoints the intent and suspends. The control plane performs the actual invocation and re-invokes the original Lambda with the result.
 
+**Usage:**
+```rust,ignore
+let response: TargetResponse = ctx
+    .invoke(
+        Some("call-processor"),
+        &target_function_arn,
+        Some(TargetEvent { data: "input" }),
+    )
+    .await?;
+```
+
+**Examples:** [`invoke_caller`](examples/src/bin/invoke_caller/main.rs), [`invoke_target`](examples/src/bin/invoke_target/main.rs)
+
+---
+
 ### Parallel/Map (`src/context/durable_context/parallel.rs`, `map.rs`)
 
 Executes multiple operations concurrently within a parent context:
 
+**Flow (local control):**
 ```mermaid
 flowchart TB
-    Parent["Parent Context"] --> Op1["Op 1"]
-    Parent --> Op2["Op 2"]
-    Parent --> Op3["Op 3"]
+    Parent["Parent Context<br/>(Context: Parallel/Map)"] --> Gate["Scheduler<br/>(max_concurrency)"]
+    Gate --> B1["Child Context A<br/>(ParallelBranch/MapItem)"]
+    Gate --> B2["Child Context B<br/>(ParallelBranch/MapItem)"]
+    Gate --> B3["Child Context C<br/>(ParallelBranch/MapItem)"]
 
-    Op1 --> Aggregate["Aggregate Results"]
-    Op2 --> Aggregate
-    Op3 --> Aggregate
+    B1 --> R1["Result / Error / Started"]
+    B2 --> R2["Result / Error / Started"]
+    B3 --> R3["Result / Error / Started"]
+
+    R1 --> Aggregate["BatchResult<br/>+ CompletionConfig"]
+    R2 --> Aggregate
+    R3 --> Aggregate
+    Aggregate --> Done["Complete when:<br/>all done OR min_successful reached OR failure tolerance exceeded"]
+```
+
+**Sequence (control plane):**
+```mermaid
+sequenceDiagram
+    participant SDK
+    participant ControlPlane as Control Plane
+
+    SDK->>ControlPlane: checkpoint(Context, START)<br/>sub_type=Parallel/Map
+    loop Branch/Item (max_concurrency)
+        SDK->>ControlPlane: checkpoint(Context, START)<br/>sub_type=ParallelBranch/MapItem
+        SDK->>SDK: Execute child context
+        SDK->>ControlPlane: checkpoint(Context, SUCCEED/FAIL)<br/>sub_type=ParallelBranch/MapItem
+    end
+    SDK->>ControlPlane: checkpoint(Context, SUCCEED/FAIL)<br/>sub_type=Parallel/Map
+    Note over SDK: CompletionConfig may allow early completion
 ```
 
 Uses child contexts with `parent_id` to group related operations. Creates `Context` operations for the parent (`sub_type = "Parallel"` or `"Map"`) and each branch/item (`"ParallelBranch"` or `"MapItem"`). See [Context and Execution Operations](#context-and-execution-operations) for details.
+On replay, completed children are reconstructed from checkpoint data, while incomplete branches/items are either skipped or re-executed based on the replay state and completion rules.
+
+**Usage (parallel):**
+```rust,ignore
+let branches: Vec<BranchFn<String>> = vec![
+    Box::new(|ctx| Box::pin(async move { ctx.step(...).await })),
+    Box::new(|ctx| Box::pin(async move { ctx.step(...).await })),
+];
+
+let config = ParallelConfig::new().with_max_concurrency(2);
+let batch = ctx.parallel(Some("fetch-all"), branches, Some(config)).await?;
+
+batch.throw_if_error()?;  // Fail fast on any error
+let results = batch.values();  // Get successful results
+```
+
+**Usage (parallel_named):**
+```rust,ignore
+use lambda_durable_execution_rust::types::NamedParallelBranch;
+
+let branches = vec![
+    NamedParallelBranch::new(fetch_users_fn).with_name("fetch_users"),
+    NamedParallelBranch::new(fetch_orders_fn).with_name("fetch_orders"),
+];
+
+let batch = ctx.parallel_named(Some("fetch-data"), branches, None).await?;
+```
+
+**Usage (map):**
+```rust,ignore
+let items = vec![1, 2, 3, 4, 5];
+let config = MapConfig::new().with_max_concurrency(2);
+
+let batch = ctx
+    .map(
+        Some("double-items"),
+        items,
+        |item, item_ctx, index| async move {
+            item_ctx.step(Some(&format!("item-{index}")), |_| async move {
+                Ok(item * 2)
+            }, None).await
+        },
+        Some(config),
+    )
+    .await?;
+
+let doubled: Vec<i32> = batch.values();  // [2, 4, 6, 8, 10]
+```
+
+**Examples:** [`parallel`](examples/src/bin/parallel/main.rs), [`parallel_named`](examples/src/bin/parallel_named/main.rs), [`parallel_first_successful`](examples/src/bin/parallel_first_successful/main.rs), [`map_operations`](examples/src/bin/map_operations/main.rs), [`map_with_failure_tolerance`](examples/src/bin/map_with_failure_tolerance/main.rs)
+
+---
 
 ### WaitForCondition (`src/context/durable_context/wait_condition/`)
 
 Polls a condition function until a configured strategy signals completion:
 
+**Flow (local control):**
+```mermaid
+flowchart TB
+    Call["ctx.wait_for_condition()"] --> Replay{"Replay status?"}
+    Replay -->|Succeeded| Return["Return cached state"]
+    Replay -->|Failed| Error["Return error"]
+    Replay -->|Not completed| Check["check_fn(state) -> new_state"]
+    Check --> Decide["wait_strategy(new_state)"]
+    Decide -->|Continue| Retry["checkpoint(Step, RETRY)<br/>terminate + delay"]
+    Decide -->|Stop| Succeed["checkpoint(Step, SUCCEED)<br/>return state"]
+```
+
+**Sequence (control plane):**
 ```mermaid
 sequenceDiagram
     participant SDK
@@ -332,6 +575,29 @@ sequenceDiagram
 
 The `check_fn` receives the current state and returns only the updated state. The `WaitConditionDecision` (Continue/Stop) comes from the configured `wait_strategy` function, which inspects the state to decide whether to continue polling. On `Stop`, the final state is returned. Encoded as `OperationType::Step` with `sub_type = "WaitForCondition"`.
 
+**Usage:**
+```rust,ignore
+let wait_strategy = Arc::new(|state: &i32, _attempt: u32| {
+    if *state >= 3 {
+        WaitConditionDecision::Stop
+    } else {
+        WaitConditionDecision::Continue { delay: Duration::seconds(5) }
+    }
+});
+
+let final_state = ctx
+    .wait_for_condition(
+        Some("poll-status"),
+        |state: i32, _step_ctx| async move { Ok(check_status(state).await?) },
+        WaitConditionConfig::new(0, wait_strategy),
+    )
+    .await?;
+```
+
+**Examples:** [`wait_for_condition`](examples/src/bin/wait_for_condition/main.rs)
+
+---
+
 ### Context and Execution Operations
 
 Two additional operation types:
@@ -342,7 +608,27 @@ Two additional operation types:
   - `parallel` branches → `sub_type = "ParallelBranch"`
   - `map` parent → `sub_type = "Map"`
   - `map` items → `sub_type = "MapItem"`
+
+  Context operations include `ContextDetails` with a `ReplayChildren` boolean field that controls whether child operations should be replayed.
+
 - **Execution**: The top-level operation representing the entire durable execution. Contains `input_payload` and `output_payload` in `execution_details`.
+
+**Usage (run_in_child_context):**
+```rust,ignore
+let result = ctx
+    .run_in_child_context(
+        Some("batch-processing"),
+        |child_ctx| async move {
+            let a = child_ctx.step(Some("step-a"), |_| async { Ok(1) }, None).await?;
+            let b = child_ctx.step(Some("step-b"), |_| async { Ok(2) }, None).await?;
+            Ok(a + b)
+        },
+        None,
+    )
+    .await?;
+```
+
+**Examples:** [`child_context`](examples/src/bin/child_context/main.rs), [`block_example`](examples/src/bin/block_example/main.rs)
 
 ## Replay Mechanism
 
@@ -608,6 +894,20 @@ src/
     ├── mod.rs
     └── types.rs               # DurableError, ErrorObject
 ```
+
+## Quotas and Limits
+
+The following limits apply to Lambda durable executions:
+
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| Execution timeout | 31,536,000 seconds (1 year) | Maximum duration for a durable execution |
+| State retention | 1-365 days | How long execution state is preserved |
+| Checkpoint payload | 256KB | Per checkpoint call (AWS-documented) |
+| SDK batch limit | 750KB | SDK batches updates before sending (derived from official SDKs) |
+| Step retry delay | 1-31,622,400 seconds | `NextAttemptDelaySeconds` range (~366 days max) |
+| Operations per GetDurableExecutionState | 1,000 max | Default 100; pagination token expires after 24 hours |
+| Invocation payload | 6MB sync, 1MB async | Standard Lambda limits apply |
 
 ## Testing
 
