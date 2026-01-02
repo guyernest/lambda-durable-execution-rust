@@ -1,4 +1,4 @@
-# lambda-durable-execution-rust (experimental)
+# Lambda Durable Execution (rust/experimental)
 
 lambda-durable-execution-rust is an experimental, community-maintained Rust SDK for AWS Lambda Durable Execution. It provides durable operations for checkpointing, waits, callbacks, invokes, and fan-out patterns.
 
