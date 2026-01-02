@@ -27,6 +27,7 @@ The SDK enables Lambda functions to execute long-running workflows by checkpoint
 
 
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart TB
     Handler["<b>User's Durable Function</b><br/>async fn handler(event: E, ctx: DurableContextHandle) -> Result&lt;R&gt;"]
 
@@ -83,6 +84,7 @@ flowchart TB
 
 **First Run:**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     A1["ctx.step('a', ...)"] --> A2["ctx.step('b', ...)"]
     A2 --> A3["ctx.wait(60s)"]
@@ -92,6 +94,7 @@ flowchart LR
 
 **Second Run (after wait completes):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     B1["ctx.step('a', ...)"] -->|cached| B2["ctx.step('b', ...)"]
     B2 -->|cached| B3["ctx.wait(60s)"]
@@ -175,6 +178,7 @@ When an operation needs to suspend (wait, callback, invoke), it:
 The `select!` detects the termination signal and cancels the handler future, allowing the runtime to return `PENDING` gracefully.
 
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant Handler as User Handler Task
     participant TM as Termination Monitor
@@ -287,6 +291,7 @@ Executes a closure and checkpoints the result:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     Start["START<br/>checkpoint"] --> Execute["Execute<br/>closure"]
     Execute --> Complete["SUCCEED /<br/>FAIL"]
@@ -294,6 +299,7 @@ flowchart LR
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -343,6 +349,7 @@ Suspends for a duration:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     Call["ctx.wait()"] --> Replay{"Replay status?"}
     Replay -->|Succeeded| Return["Return cached result"]
@@ -354,6 +361,7 @@ flowchart LR
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -380,6 +388,7 @@ Waits for external system to call back:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     Call["ctx.wait_for_callback()"] --> Replay{"Replay status?"}
     Replay -->|Succeeded| Return["Return cached result"]
@@ -393,6 +402,7 @@ flowchart LR
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -442,6 +452,7 @@ Invokes another Lambda function:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart LR
     Call["ctx.invoke()"] --> Replay{"Replay status?"}
     Replay -->|Succeeded| Return["Return cached result"]
@@ -455,6 +466,7 @@ flowchart LR
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -494,6 +506,7 @@ Executes multiple operations concurrently within a parent context:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart TB
     Parent["Parent Context<br/>(Context: Parallel/Map)"] --> Gate["Scheduler<br/>(max_concurrency)"]
     Gate --> B1["Child Context A<br/>(ParallelBranch/MapItem)"]
@@ -512,6 +525,7 @@ flowchart TB
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -586,6 +600,7 @@ Polls a condition function until a configured strategy signals completion:
 
 **Flow (local control):**
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart TB
     Call["ctx.wait_for_condition()"] --> Replay{"Replay status?"}
     Replay -->|Succeeded| Return["Return cached state"]
@@ -598,6 +613,7 @@ flowchart TB
 
 **Sequence (control plane):**
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
@@ -700,6 +716,7 @@ Parent context is tracked separately in `current_parent_id` and sent as `parent_
 ### Replay Flow
 
 ```mermaid
+%%{init: {"flowchart": {"diagramPadding": 130}, "look": "handDrawn", "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 flowchart TB
     Start["Operation called<br/>(step, invoke, etc.)"]
     Hash["Generate hashed_id"]
@@ -811,6 +828,7 @@ Operation types:
 ### Checkpoint Flow
 
 ```mermaid
+%%{init: {"sequence": {"diagramMarginX": 130, "diagramMarginY": 30, "bottomMarginAdj": 130}, "fontFamily": "virgil, excalifont, segoe print, bradley hand, chalkboard se, marker felt, comic sans ms, cursive"}}%%
 sequenceDiagram
     participant SDK
     participant ControlPlane as Control Plane
