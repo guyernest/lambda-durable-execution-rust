@@ -13,8 +13,8 @@ lambda-durable-execution-rust is an experimental, community-maintained Rust SDK 
 
 ## Documentation
 
-- ARCHITECTURE.md - Internal architecture, operation diagrams, and code examples.
-- examples/ - Deployable Lambda examples with SAM template.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture, operation diagrams, and code examples.
+- [examples/](examples/) - Deployable Lambda examples with SAM template.
 
 ## Quickstart
 
@@ -55,8 +55,6 @@ async fn main() -> Result<(), lambda_runtime::Error> {
     lambda_runtime::run(with_durable_execution_service(handler, None)).await
 }
 ```
-
-These examples are illustrative. Actual costs will depend on traffic patterns and configuration.
 
 ## Durable Operations
 

@@ -25,8 +25,6 @@ This document explains the internal architecture of the Lambda Durable Execution
 
 The SDK enables Lambda functions to execute long-running workflows by checkpointing state to an AWS control plane. When a Lambda needs to wait (for time, callbacks, or chained invocations), it suspends and the control plane re-invokes it later with the updated state.
 
-> [!IMPORTANT]
-> Examples in this document are illustrative. Actual costs will depend on traffic patterns and configuration.
 
 ```mermaid
 flowchart TB
@@ -114,7 +112,49 @@ pub fn with_durable_execution_service<E, R, F, Fut>(
 ) -> impl Service<LambdaEvent<DurableExecutionInvocationInput>, ...>
 ```
 
-Key mechanism - **racing handler against termination**:
+Example using with_durable_execution_service:
+
+```rust,no_run
+use lambda_durable_execution_rust::prelude::*;
+use lambda_durable_execution_rust::runtime::with_durable_execution_service;
+
+async fn handler(_event: serde_json::Value, _ctx: DurableContextHandle) -> DurableResult<()> {
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), lambda_runtime::Error> {
+    let service = with_durable_execution_service(handler, None);
+    lambda_runtime::run(service).await
+}
+```
+
+The service wrapper is the shortest path for default configuration. The builder is useful when injecting a custom Lambda client or service configuration.
+
+Example using the durable_handler builder:
+
+```rust,no_run
+use lambda_durable_execution_rust::prelude::*;
+use lambda_durable_execution_rust::runtime::durable_handler;
+use lambda_durable_execution_rust::types::DurableExecutionInvocationInput;
+use lambda_runtime::{service_fn, LambdaEvent};
+
+async fn handler(_event: serde_json::Value, _ctx: DurableContextHandle) -> DurableResult<()> {
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), lambda_runtime::Error> {
+    let handler_fn = durable_handler(handler).build();
+    let service = service_fn(move |event: LambdaEvent<DurableExecutionInvocationInput>| {
+        let handler_fn = handler_fn.clone();
+        async move { handler_fn(event.payload).await }
+    });
+    lambda_runtime::run(service).await
+}
+```
+
+Key mechanism: **racing handler against termination**.
 
 ```rust
 let result = tokio::select! {

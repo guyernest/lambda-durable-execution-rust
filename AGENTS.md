@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-- Root `Cargo.toml` defines the SDK crate `lambda-durable-execution-rust`. Source lives in `src/`.
+- Root `Cargo.toml` defines the SDK crate `lambda-durable-execution-rust` and a workspace that includes `examples/`. Source lives in `src/`.
 - `examples/`: a separate Cargo package (`examples/Cargo.toml`) with deployable Lambda binaries under `examples/src/bin/`. Deployment config is in `examples/template.yaml`; generated diagrams live in `examples/diagrams/`; validation tooling lives in `examples/scripts/`.
 - Tests live alongside code in `#[cfg(test)] mod tests { … }` blocks (no top-level integration tests yet). Rustdoc examples are compiled (`no_run`), so keep them buildable.
 
