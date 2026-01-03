@@ -17,7 +17,7 @@ jobs:
         id: toolchain
         uses: dtolnay/rust-toolchain@1.88.0
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -41,3 +41,15 @@ jobs:
 
       - name: Examples (build/tests)
         run: cargo test --manifest-path examples/Cargo.toml --all-targets
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Coverage (llvm-cov)
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
