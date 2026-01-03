@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/step/steps_with_retry.py
+// See NOTICE for attribution.
+
 //! Step retries (exponential backoff) workflow.
 //!
 //! Demonstrates:

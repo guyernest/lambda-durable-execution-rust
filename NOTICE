@@ -1,0 +1,10 @@
+Lambda Durable Execution Rust SDK
+
+Copyright 2026 Alessandro Bologna
+
+This product includes software developed by Amazon.com, Inc. or its affiliates:
+- aws-durable-execution-sdk-js
+- aws-durable-execution-sdk-python
+- aws-durable-execution-sdk-python-testing
+
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.

@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/run_in_child_context/run_in_child_context.py
+// See NOTICE for attribution.
+
 //! Child context (“scoped workflow”) example.
 //!
 //! Demonstrates:

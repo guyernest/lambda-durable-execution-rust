@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/hello_world.py
+// See NOTICE for attribution.
+
 //! Hello World durable workflow.
 //!
 //! Demonstrates:

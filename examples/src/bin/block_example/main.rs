@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/block_example/block_example.py
+// See NOTICE for attribution.
+
 //! Nested child contexts (“blocks”) example.
 //!
 //! Demonstrates:

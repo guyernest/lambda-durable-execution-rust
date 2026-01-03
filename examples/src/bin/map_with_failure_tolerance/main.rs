@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/map/map_with_failure_tolerance.py
+// See NOTICE for attribution.
+
 //! Map fan-out with tolerated failures example.
 //!
 //! Demonstrates:

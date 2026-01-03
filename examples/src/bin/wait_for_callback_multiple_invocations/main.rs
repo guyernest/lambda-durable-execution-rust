@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/wait_for_callback/wait_for_callback_multiple_invocations.py
+// See NOTICE for attribution.
+
 //! Multiple callbacks in one workflow example.
 //!
 //! Demonstrates:

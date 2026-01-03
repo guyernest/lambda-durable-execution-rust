@@ -164,6 +164,12 @@ See `examples/README.md` for:
 - validating all examples with `examples/scripts/validate.py`
 - generated Mermaid and Markdown diagrams per example
 
+## License and attribution
+
+This repository is licensed under Apache-2.0. See `LICENSE` and `NOTICE`.
+
+The public API and behavior are modeled after the official AWS Durable Execution SDKs for JavaScript and Python. This repository is not affiliated with AWS.
+
 ## References
 
 ### AWS Documentation

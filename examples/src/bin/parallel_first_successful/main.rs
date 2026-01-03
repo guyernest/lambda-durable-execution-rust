@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/parallel/parallel_first_successful.py
+// See NOTICE for attribution.
+
 //! Parallel early-completion (“first successful”) example.
 //!
 //! Demonstrates:

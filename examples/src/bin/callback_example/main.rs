@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/callback/callback_simple.py
+// See NOTICE for attribution.
+
 //! Durable callback (external approval) workflow.
 //!
 //! Demonstrates:

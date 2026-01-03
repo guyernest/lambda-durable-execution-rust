@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Constructed from scratch. No direct one-to-one example in the python-testing repo.
+// See NOTICE for attribution.
+
 //! Parallel with named branches example.
 //!
 //! Demonstrates:

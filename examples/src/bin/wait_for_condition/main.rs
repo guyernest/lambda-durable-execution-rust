@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/wait_for_condition/wait_for_condition.py
+// See NOTICE for attribution.
+
 //! Wait-for-condition (polling) example.
 //!
 //! Demonstrates:

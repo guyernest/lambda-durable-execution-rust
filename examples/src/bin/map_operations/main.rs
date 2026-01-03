@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Ported from aws-durable-execution-sdk-python-testing examples.
+// Source: examples/src/map/map_operations.py
+// See NOTICE for attribution.
+
 //! Map fan-out (bounded concurrency) example.
 //!
 //! Demonstrates:
