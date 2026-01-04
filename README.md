@@ -204,9 +204,8 @@ See `examples/README.md` for:
 - validating all examples with `examples/scripts/validate.py`
 - generated Mermaid and Markdown diagrams per example
 
-## Runtime caveat (Durable Execution)
-
-Durable Execution does not yet support the Rust runtime directly. The examples deploy using the Node.js runtime and set `AWS_LAMBDA_EXEC_WRAPPER` to `/var/task/bootstrap` so the Rust bootstrap is used. Without this, deployment fails with an error indicating that `al2023` is not a supported runtime for Durable Execution.
+> [!TIP]
+> Durable Execution does not yet support the Rust runtime directly. The examples deploy using the Node.js runtime and set `AWS_LAMBDA_EXEC_WRAPPER` to `/var/task/bootstrap` so the Rust bootstrap is used. Without this, deployment fails with an error indicating that `al2023` is not a supported runtime for Durable Execution.
 
 ## License and attribution
 

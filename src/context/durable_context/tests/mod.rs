@@ -37,10 +37,11 @@ impl DurableLogger for RecordingLogger {
         message: &str,
         _fields: Option<&[(&'static str, String)]>,
     ) {
-        self.entries
-            .lock()
-            .expect("entries mutex")
-            .push((level, data.clone(), message.to_string()));
+        self.entries.lock().expect("entries mutex").push((
+            level,
+            data.clone(),
+            message.to_string(),
+        ));
     }
 }
 
@@ -233,9 +234,7 @@ async fn test_context_logger_includes_parent_operation_id() {
     let exec_ctx = ExecutionContext::new(&input, lambda_service, Some(logger), true)
         .await
         .expect("execution context should initialize");
-    exec_ctx
-        .set_parent_id(Some("parent-op".to_string()))
-        .await;
+    exec_ctx.set_parent_id(Some("parent-op".to_string())).await;
     let ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)));
 
     ctx.logger().info("parent");
