@@ -30,7 +30,7 @@ serde = { version = "1", features = ["derive"] }
 Minimal workflow (checkpointed step and durable wait):
 ```rust,no_run
 use lambda_durable_execution_rust::prelude::*;
-use lambda_durable_execution_rust::runtime::with_durable_execution_service;
+use lambda_durable_execution_rust::runtime::{with_durable_execution_service, DurableExecutionConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
