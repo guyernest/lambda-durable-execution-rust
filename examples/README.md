@@ -15,6 +15,9 @@ sam build
 sam deploy
 ```
 
+> [!TIP]
+> Durable Execution does not yet support the Rust runtime directly. The examples use the Node.js runtime and set `AWS_LAMBDA_EXEC_WRAPPER` to `/var/task/bootstrap` so the Rust bootstrap is used. Without this, deployment fails with an error indicating that `al2023` is not a supported runtime for Durable Execution.
+
 ## Validate & regenerate diagrams
 
 Run all deployed examples, save artifacts under `.durable-validation`, and regenerate Mermaid + Markdown diagrams under `diagrams/`:
