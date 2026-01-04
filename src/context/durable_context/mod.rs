@@ -55,9 +55,10 @@ use crate::error::{DurableError, DurableResult, ErrorObject};
 use crate::retry::presets;
 use crate::types::{
     BatchItem, BatchItemStatus, BatchResult, CallbackConfig, ChainedInvokeUpdateOptions,
-    ChildContextConfig, ContextUpdateOptions, Duration, InvokeConfig, MapConfig,
-    NamedParallelBranch, OperationAction, OperationStatus, OperationType, OperationUpdate,
-    ParallelConfig, Serdes, StepConfig, StepSemantics, WaitConditionConfig, WaitConditionDecision,
+    ChildContextConfig, ContextUpdateOptions, DurableLogData, DurableLogLevel, Duration,
+    InvokeConfig, MapConfig, NamedParallelBranch, OperationAction, OperationStatus, OperationType,
+    OperationUpdate, ParallelConfig, Serdes, StepConfig, StepSemantics, WaitConditionConfig,
+    WaitConditionDecision,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashSet;
@@ -238,6 +239,13 @@ impl DurableContextHandle {
     pub fn execution_context(&self) -> &ExecutionContext {
         &self.inner.execution_ctx
     }
+
+    /// Get a durable logger for context-level messages.
+    ///
+    /// The logger uses the configured durable logger and respects mode-aware logging.
+    pub fn logger(&self) -> DurableContextLogger {
+        DurableContextLogger::new(self.inner.execution_ctx.clone())
+    }
 }
 
 impl std::fmt::Debug for DurableContextHandle {
@@ -276,5 +284,116 @@ impl std::fmt::Debug for DurableContextImpl {
         f.debug_struct("DurableContextImpl")
             .field("execution_ctx", &self.execution_ctx)
             .finish()
+    }
+}
+
+/// Mode-aware logger for durable context operations.
+#[derive(Clone)]
+pub struct DurableContextLogger {
+    execution_ctx: ExecutionContext,
+}
+
+impl DurableContextLogger {
+    pub(crate) fn new(execution_ctx: ExecutionContext) -> Self {
+        Self { execution_ctx }
+    }
+
+    fn should_log(&self) -> bool {
+        if !self.execution_ctx.mode_aware_logging {
+            return true;
+        }
+
+        match self.execution_ctx.mode.try_lock() {
+            Ok(mode) => *mode != ExecutionMode::Replay,
+            Err(_) => true,
+        }
+    }
+
+    fn log_data(&self) -> DurableLogData {
+        let operation_id = match self.execution_ctx.current_parent_id.try_lock() {
+            Ok(parent_id) => parent_id.clone(),
+            Err(_) => None,
+        };
+
+        DurableLogData {
+            durable_execution_arn: self.execution_ctx.durable_execution_arn.clone(),
+            operation_id,
+            step_name: None,
+            attempt: None,
+        }
+    }
+
+    /// Log a debug message.
+    pub fn debug(&self, message: &str) {
+        if !self.should_log() {
+            return;
+        }
+        self.execution_ctx
+            .logger
+            .log(DurableLogLevel::Debug, &self.log_data(), message, None);
+    }
+
+    /// Log an info message.
+    pub fn info(&self, message: &str) {
+        if !self.should_log() {
+            return;
+        }
+        self.execution_ctx
+            .logger
+            .log(DurableLogLevel::Info, &self.log_data(), message, None);
+    }
+
+    /// Log a warning message.
+    pub fn warn(&self, message: &str) {
+        if !self.should_log() {
+            return;
+        }
+        self.execution_ctx
+            .logger
+            .log(DurableLogLevel::Warn, &self.log_data(), message, None);
+    }
+
+    /// Log an error message.
+    pub fn error(&self, message: &str) {
+        if !self.should_log() {
+            return;
+        }
+        self.execution_ctx
+            .logger
+            .log(DurableLogLevel::Error, &self.log_data(), message, None);
+    }
+
+    /// Log a debug message with additional fields.
+    pub fn debug_with<F>(&self, message: &str, fields: F)
+    where
+        F: FnOnce() -> Vec<(&'static str, String)>,
+    {
+        if !self.should_log() {
+            return;
+        }
+        let extra = fields();
+        self.execution_ctx.logger.log(
+            DurableLogLevel::Debug,
+            &self.log_data(),
+            message,
+            Some(&extra),
+        );
+    }
+
+    /// Log an info message with additional fields.
+    pub fn info_with<F>(&self, message: &str, fields: F)
+    where
+        F: FnOnce() -> Vec<(&'static str, String)>,
+    {
+        if !self.should_log() {
+            return;
+        }
+        let extra = fields();
+        self.execution_ctx.logger.log(
+            DurableLogLevel::Info,
+            &self.log_data(),
+            message,
+            Some(&extra),
+        );
     }
 }

@@ -1,6 +1,12 @@
 use self::helpers::make_execution_context;
 use super::*;
-use crate::types::{BatchCompletionReason, CompletionConfig};
+use crate::mock::MockLambdaService;
+use crate::types::{
+    BatchCompletionReason, CompletionConfig, DurableExecutionInvocationInput, DurableLogData,
+    DurableLogLevel, DurableLogger,
+};
+use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 mod callback;
 mod child;
@@ -11,6 +17,32 @@ mod parallel;
 mod step;
 mod wait;
 mod wait_condition;
+
+#[derive(Default)]
+struct RecordingLogger {
+    entries: Mutex<Vec<(DurableLogLevel, DurableLogData, String)>>,
+}
+
+impl RecordingLogger {
+    fn entries(&self) -> Vec<(DurableLogLevel, DurableLogData, String)> {
+        self.entries.lock().expect("entries mutex").clone()
+    }
+}
+
+impl DurableLogger for RecordingLogger {
+    fn log(
+        &self,
+        level: DurableLogLevel,
+        data: &DurableLogData,
+        message: &str,
+        _fields: Option<&[(&'static str, String)]>,
+    ) {
+        self.entries
+            .lock()
+            .expect("entries mutex")
+            .push((level, data.clone(), message.to_string()));
+    }
+}
 
 #[test]
 fn test_validate_completion_config_ok() {
@@ -138,6 +170,79 @@ async fn test_durable_context_handle_debug_and_accessors() {
     let impl_ctx = DurableContextImpl::new(exec_ctx);
     let impl_debug = format!("{impl_ctx:?}");
     assert!(impl_debug.contains("DurableContextImpl"));
+}
+
+#[tokio::test]
+async fn test_context_logger_records_execution_logs() {
+    let arn = "arn:test:durable";
+    let input_json = helpers::create_replay_input(arn, &json!({}), vec![]);
+    let input: DurableExecutionInvocationInput =
+        serde_json::from_value(input_json).expect("valid invocation input");
+    let lambda_service = Arc::new(MockLambdaService::new());
+    let recording = Arc::new(RecordingLogger::default());
+    let logger: Arc<dyn DurableLogger> = recording.clone();
+
+    let exec_ctx = ExecutionContext::new(&input, lambda_service, Some(logger), true)
+        .await
+        .expect("execution context should initialize");
+    let ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)));
+
+    ctx.logger().info("hello");
+
+    let entries = recording.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1.durable_execution_arn, arn);
+}
+
+#[tokio::test]
+async fn test_context_logger_suppresses_replay_logs() {
+    let arn = "arn:test:durable";
+    let operations = vec![json!({
+        "Id": "step-1",
+        "Type": "STEP",
+        "Status": "SUCCEEDED"
+    })];
+    let input_json = helpers::create_replay_input(arn, &json!({}), operations);
+    let input: DurableExecutionInvocationInput =
+        serde_json::from_value(input_json).expect("valid invocation input");
+    let lambda_service = Arc::new(MockLambdaService::new());
+    let recording = Arc::new(RecordingLogger::default());
+    let logger: Arc<dyn DurableLogger> = recording.clone();
+
+    let exec_ctx = ExecutionContext::new(&input, lambda_service, Some(logger), true)
+        .await
+        .expect("execution context should initialize");
+    let ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)));
+
+    ctx.logger().info("should-suppress");
+
+    let entries = recording.entries();
+    assert!(entries.is_empty());
+}
+
+#[tokio::test]
+async fn test_context_logger_includes_parent_operation_id() {
+    let arn = "arn:test:durable";
+    let input_json = helpers::create_replay_input(arn, &json!({}), vec![]);
+    let input: DurableExecutionInvocationInput =
+        serde_json::from_value(input_json).expect("valid invocation input");
+    let lambda_service = Arc::new(MockLambdaService::new());
+    let recording = Arc::new(RecordingLogger::default());
+    let logger: Arc<dyn DurableLogger> = recording.clone();
+
+    let exec_ctx = ExecutionContext::new(&input, lambda_service, Some(logger), true)
+        .await
+        .expect("execution context should initialize");
+    exec_ctx
+        .set_parent_id(Some("parent-op".to_string()))
+        .await;
+    let ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)));
+
+    ctx.logger().info("parent");
+
+    let entries = recording.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].1.operation_id.as_deref(), Some("parent-op"));
 }
 
 #[test]

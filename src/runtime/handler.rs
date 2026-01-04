@@ -252,6 +252,18 @@ where
         self
     }
 
+    /// Set a custom durable logger.
+    pub fn with_logger(mut self, logger: Arc<dyn DurableLogger>) -> Self {
+        self.config.logger = Some(logger);
+        self
+    }
+
+    /// Enable or disable mode-aware logging.
+    pub fn with_mode_aware_logging(mut self, enabled: bool) -> Self {
+        self.config.mode_aware_logging = enabled;
+        self
+    }
+
     /// Build the handler function.
     pub fn build(
         self,
@@ -330,6 +342,18 @@ mod tests {
     fn test_config_builder() {
         let config = DurableExecutionConfig::new();
         assert!(config.lambda_service.is_none());
+    }
+
+    #[test]
+    fn test_durable_handler_builder_with_logger() {
+        let logger = Arc::new(crate::types::TracingLogger);
+        let builder =
+            durable_handler(|_event: serde_json::Value, _ctx| async { Ok(json!({"ok": true})) })
+                .with_logger(logger)
+                .with_mode_aware_logging(false);
+
+        assert!(builder.config.logger.is_some());
+        assert!(!builder.config.mode_aware_logging);
     }
 
     fn init_aws_env() {

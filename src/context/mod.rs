@@ -125,8 +125,8 @@ mod step_context;
 
 pub use crate::types::{BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult};
 pub use durable_context::{
-    BoxFuture, CallbackHandle, ChildContextFn, DurableContextHandle, DurableContextImpl, StepFn,
-    SubmitterFn,
+    BoxFuture, CallbackHandle, ChildContextFn, DurableContextHandle, DurableContextImpl,
+    DurableContextLogger, StepFn, SubmitterFn,
 };
 pub use execution_context::*;
 pub use step_context::*;

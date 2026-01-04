@@ -256,7 +256,7 @@ pub mod mock {
 pub mod prelude {
     pub use crate::context::{
         BatchCompletionReason, BatchItem, BatchItemStatus, BatchResult, CallbackHandle,
-        DurableContextHandle, DurableContextImpl, StepContext,
+        DurableContextHandle, DurableContextImpl, DurableContextLogger, StepContext,
     };
     pub use crate::error::{DurableError, DurableResult, ErrorObject};
     pub use crate::retry::{
