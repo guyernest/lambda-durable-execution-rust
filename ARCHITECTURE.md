@@ -245,6 +245,20 @@ Shared state for a single Lambda invocation:
 
 On initialization, if `initial_execution_state.next_marker` is set, the context paginates additional operations via `get_durable_execution_state` API calls.
 
+### Logging
+
+The SDK provides a durable logging surface that mirrors the official SDK intent. The JS SDK exposes `context.logger` with enriched metadata and replay suppression. The Python SDK wraps the standard logger with `LogInfo` and suppresses replay logs. The Rust SDK uses `DurableLogger` and mode-aware logging to provide the same guarantees.
+
+Logging components:
+- `DurableLogger` and `DurableLogData` (`src/types/logger.rs`)
+- `TracingLogger` default implementation (uses `tracing`)
+- `DurableContextLogger` returned by `ctx.logger()`
+- `StepContext` log helpers (`debug/info/warn/error`), used inside steps
+
+`DurableLogData` includes `durable_execution_arn`, `operation_id`, `step_name`, and `attempt`. The context logger uses the current parent id as the operation id when present.
+
+Mode-aware logging is enabled by default. It suppresses logs during replay. Disable it using `DurableExecutionConfig::with_mode_aware_logging(false)` or the builder API `durable_handler(...).with_mode_aware_logging(false)`.
+
 ### CheckpointManager (`src/checkpoint/manager.rs`)
 
 Manages communication with the AWS control plane:

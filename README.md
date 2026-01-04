@@ -86,6 +86,46 @@ The runtime automatically:
 
 Large handler responses that exceed the Lambda response size limit are checkpointed. The response payload is empty. The result can be reconstructed from checkpoint state.
 
+## Logging
+
+The Rust SDK provides a durable logger that mirrors the intent of the official SDKs. The JS SDK exposes `context.logger` with enriched metadata and replay suppression. The Python SDK wraps standard logging with `LogInfo` and suppresses replay logs. The Rust SDK offers a similar experience with `ctx.logger()` and `StepContext` logging helpers.
+
+Logging surfaces:
+- `ctx.logger()` for context-level messages.
+- `step_ctx.info/debug/warn/error` for step-level messages.
+
+The default logger is `TracingLogger`, which emits structured fields via `tracing`. Logs are mode-aware by default and are suppressed during replay. Disable replay suppression if full logs are needed for debugging.
+
+The builder API supports the same configuration through `durable_handler(...).with_logger(...)`.
+
+```rust,no_run
+use lambda_durable_execution_rust::prelude::*;
+use lambda_durable_execution_rust::runtime::with_durable_execution_service;
+use std::sync::Arc;
+
+async fn handler(_event: serde_json::Value, ctx: DurableContextHandle) -> DurableResult<()> {
+    ctx.logger().info("handler start");
+    ctx.step(
+        Some("work"),
+        |step_ctx| async move {
+            step_ctx.info("step start");
+            Ok(())
+        },
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), lambda_runtime::Error> {
+    let config = DurableExecutionConfig::new()
+        .with_logger(Arc::new(TracingLogger))
+        .with_mode_aware_logging(false);
+    lambda_runtime::run(with_durable_execution_service(handler, Some(config))).await
+}
+```
+
 ## Design notes
 
 - Replay safety: Step bodies should be deterministic and side-effect-free. Use durable operations to express side effects.
@@ -163,6 +203,10 @@ See `examples/README.md` for:
 - deploying `examples/template.yaml` with SAM
 - validating all examples with `examples/scripts/validate.py`
 - generated Mermaid and Markdown diagrams per example
+
+## Runtime caveat (Durable Execution)
+
+Durable Execution does not yet support the Rust runtime directly. The examples deploy using the Node.js runtime and set `AWS_LAMBDA_EXEC_WRAPPER` to `/var/task/bootstrap` so the Rust bootstrap is used. Without this, deployment fails with an error indicating that `al2023` is not a supported runtime for Durable Execution.
 
 ## License and attribution
 
