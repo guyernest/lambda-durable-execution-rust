@@ -789,6 +789,55 @@ async fn test_map_execution_includes_parent_id() {
 }
 
 #[tokio::test]
+async fn test_map_iteration_parent_id_links_to_map_context() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let map_start = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("Map")
+                && update.action == OperationAction::Start
+        })
+        .expect("map start update");
+    let map_iteration_start = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("MapIteration")
+                && update.action == OperationAction::Start
+        })
+        .expect("map iteration start update");
+
+    assert_eq!(
+        map_iteration_start.parent_id.as_deref(),
+        Some(map_start.id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn test_map_execution_without_name() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

@@ -152,6 +152,51 @@ async fn test_parallel_execution_empty_branches_without_batch_serdes() {
 }
 
 #[tokio::test]
+async fn test_parallel_branch_parent_id_links_to_parallel_context() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..4 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let branches = vec![make_parallel_branch(BranchBehavior::Ok(1))];
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, None)
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 1);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let parallel_start = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("Parallel")
+                && update.action == OperationAction::Start
+        })
+        .expect("parallel start update");
+    let branch_start = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("ParallelBranch")
+                && update.action == OperationAction::Start
+        })
+        .expect("parallel branch start update");
+
+    assert_eq!(
+        branch_start.parent_id.as_deref(),
+        Some(parallel_start.id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn test_parallel_execution_min_successful_aborts_inflight() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

@@ -129,9 +129,12 @@ where
             };
 
             let inner = Arc::clone(&inner);
+            let map_parent_id = map_hashed_id.clone();
             let map_fn = Arc::clone(&map_fn);
             join_set.spawn(async move {
-                let res = inner
+                let child_execution_ctx = inner.execution_ctx.with_parent_id(map_parent_id);
+                let child_impl = Arc::new(DurableContextImpl::new(child_execution_ctx));
+                let res = child_impl
                     .run_in_child_context_with_ids(
                         child_step_id.clone(),
                         child_hashed_id,
