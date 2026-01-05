@@ -152,6 +152,47 @@ async fn test_parallel_execution_empty_branches_without_batch_serdes() {
 }
 
 #[tokio::test]
+async fn test_parallel_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-parallel".to_string()))
+        .await;
+
+    for _ in 0..2 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    type BranchFn =
+        fn(DurableContextHandle) -> BoxFuture<'static, crate::error::DurableResult<u32>>;
+    let branches: Vec<BranchFn> = Vec::new();
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, None)
+        .await
+        .unwrap();
+
+    assert!(batch.all.is_empty());
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|u| {
+            u.operation_type == OperationType::Context
+                && u.sub_type.as_deref() == Some("Parallel")
+                && u.action == OperationAction::Start
+        })
+        .expect("parallel start update");
+
+    assert_eq!(update.parent_id.as_deref(), Some("parent-parallel"));
+}
+
+#[tokio::test]
 async fn test_parallel_branch_parent_id_links_to_parallel_context() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;

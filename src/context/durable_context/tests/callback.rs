@@ -35,6 +35,35 @@ async fn test_create_callback_execution_checkpoints_start_with_options() {
 }
 
 #[tokio::test]
+async fn test_create_callback_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-callback".to_string()))
+        .await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let _handle = ctx
+        .create_callback::<serde_json::Value>(Some("callback"), None)
+        .await
+        .unwrap();
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|u| u.operation_type == OperationType::Callback)
+        .expect("callback update");
+    assert_eq!(update.action, OperationAction::Start);
+    assert_eq!(update.parent_id.as_deref(), Some("parent-callback"));
+}
+
+#[tokio::test]
 async fn test_create_callback_replay_uses_existing_id_and_payload() {
     let arn = "arn:test:durable";
     let step_id = "callback_0".to_string();

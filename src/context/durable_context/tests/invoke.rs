@@ -229,6 +229,38 @@ async fn test_invoke_execution_suspends_and_checkpoints() {
 }
 
 #[tokio::test]
+async fn test_invoke_execution_includes_parent_id() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    ctx.execution_context()
+        .set_parent_id(Some("parent-invoke".to_string()))
+        .await;
+
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+
+    let result = tokio::time::timeout(
+        StdDuration::from_millis(50),
+        ctx.invoke::<serde_json::Value, serde_json::Value>(Some("invoke"), "fn", None),
+    )
+    .await;
+    assert!(result.is_err(), "invoke should suspend");
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|u| u.operation_type == OperationType::ChainedInvoke)
+        .expect("chained invoke update");
+
+    assert_eq!(update.action, OperationAction::Start);
+    assert_eq!(update.parent_id.as_deref(), Some("parent-invoke"));
+}
+
+#[tokio::test]
 async fn test_invoke_execution_without_payload() {
     let arn = "arn:test:durable";
     let (ctx, lambda_service) = make_execution_context(arn).await;
