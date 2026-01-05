@@ -100,7 +100,7 @@ The builder API supports the same configuration through `durable_handler(...).wi
 
 ```rust,no_run
 use lambda_durable_execution_rust::prelude::*;
-use lambda_durable_execution_rust::runtime::with_durable_execution_service;
+use lambda_durable_execution_rust::runtime::{with_durable_execution_service, DurableExecutionConfig};
 use std::sync::Arc;
 
 async fn handler(_event: serde_json::Value, ctx: DurableContextHandle) -> DurableResult<()> {
