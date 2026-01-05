@@ -259,6 +259,195 @@ async fn test_map_failure_tolerance_exceeded() {
 }
 
 #[tokio::test]
+async fn test_map_checkpoints_full_batch_result_by_default() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..10 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |item, _child_ctx, _idx| async move { Ok::<u32, DurableError>(item + 1) },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 2);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("Map")
+                && update.action == OperationAction::Succeed
+        })
+        .expect("map completion update");
+
+    assert_ne!(
+        update
+            .context_options
+            .as_ref()
+            .and_then(|o| o.replay_children),
+        Some(true)
+    );
+
+    let payload = update.payload.as_deref().expect("map payload");
+    let value: serde_json::Value = serde_json::from_str(payload).expect("json payload");
+    assert_eq!(
+        value.get("kind").and_then(|k| k.as_str()),
+        Some("BatchResult")
+    );
+}
+
+#[tokio::test]
+async fn test_map_replay_full_batch_payload_returns_without_children() {
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let payload = json!({
+        "kind": "BatchResult",
+        "completion_reason": "ALL_COMPLETED",
+        "items": [
+            { "index": 0, "status": "SUCCEEDED", "result": 2 },
+            { "index": 1, "status": "FAILED", "error": "boom" },
+        ],
+    })
+    .to_string();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run when replaying full batch payload");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+    assert_eq!(batch.success_count(), 1);
+    assert_eq!(batch.failure_count(), 1);
+
+    let succeeded = batch.succeeded();
+    assert_eq!(succeeded.len(), 1);
+    assert_eq!(succeeded[0].index, 0);
+    assert_eq!(succeeded[0].result, Some(2));
+
+    let failed = batch.failed();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].index, 1);
+    match failed[0].error.as_deref() {
+        Some(DurableError::Internal(message)) => assert_eq!(message, "boom"),
+        Some(other) => panic!("unexpected error: {other:?}"),
+        None => panic!("missing error"),
+    }
+}
+
+#[tokio::test]
+async fn test_map_replay_children_reconstructs_without_running_mapper() {
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let map_hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let summary = json!({
+        "type": "MapResult",
+        "totalCount": 2,
+        "successCount": 2,
+        "failureCount": 0,
+        "completionReason": "ALL_COMPLETED",
+        "status": "SUCCEEDED",
+    })
+    .to_string();
+    let map_op = json!({
+        "Id": map_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary, "ReplayChildren": true },
+    });
+
+    let item_0_name = "map-item-0".to_string();
+    let item_0_step_id = format!("{item_0_name}_{}", 1);
+    let item_0_hashed_id = CheckpointManager::hash_id(&item_0_step_id);
+    let item_0_result = serde_json::to_string(&2u32).unwrap();
+    let item_0_op = json!({
+        "Id": item_0_hashed_id,
+        "ParentId": map_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": item_0_result },
+    });
+
+    let item_1_name = "map-item-1".to_string();
+    let item_1_step_id = format!("{item_1_name}_{}", 2);
+    let item_1_hashed_id = CheckpointManager::hash_id(&item_1_step_id);
+    let item_1_result = serde_json::to_string(&3u32).unwrap();
+    let item_1_op = json!({
+        "Id": item_1_hashed_id,
+        "ParentId": map_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": item_1_result },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    for _ in 0..3 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+    let ctx =
+        make_replay_context_with_service(arn, vec![map_op, item_0_op, item_1_op], lambda_service)
+            .await;
+
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![1u32, 2u32],
+            |_item, _child_ctx, _idx| async move {
+                panic!("map_fn should not run in ReplayChildren mode");
+                #[allow(unreachable_code)]
+                Ok::<u32, DurableError>(0)
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 2);
+    let results: Vec<u32> = batch
+        .succeeded()
+        .into_iter()
+        .map(|item| item.result.expect("result"))
+        .collect();
+    assert_eq!(results, vec![2, 3]);
+}
+
+#[tokio::test]
 async fn test_map_replay_skips_incomplete_children() {
     let arn = "arn:test:durable";
     let name = Some("map");

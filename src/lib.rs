@@ -263,9 +263,9 @@ pub mod prelude {
         presets as retry_presets, ExponentialBackoff, RetryDecision, RetryStrategy,
     };
     pub use crate::types::{
-        CallbackConfig, ChildContextConfig, DurableLogData, DurableLogLevel, DurableLogger,
-        Duration, JsonSerdes, MapConfig, ParallelConfig, Serdes, SerdesContext, StepConfig,
-        StepSemantics, TracingLogger, WaitConditionConfig, WaitConditionDecision,
+        BatchResultSerdes, CallbackConfig, ChildContextConfig, DurableLogData, DurableLogLevel,
+        DurableLogger, Duration, JsonSerdes, MapConfig, ParallelConfig, Serdes, SerdesContext,
+        StepConfig, StepSemantics, TracingLogger, WaitConditionConfig, WaitConditionDecision,
     };
 
     // Re-export Arc for DurableContext usage

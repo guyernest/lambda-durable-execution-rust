@@ -534,6 +534,191 @@ async fn test_parallel_replay_batch_serdes_validation_failed() {
 }
 
 #[tokio::test]
+async fn test_parallel_checkpoints_full_batch_result_by_default() {
+    let arn = "arn:test:durable";
+    let (ctx, lambda_service) = make_execution_context(arn).await;
+
+    for _ in 0..20 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+
+    let branches = vec![
+        make_parallel_branch(BranchBehavior::Ok(1)),
+        make_parallel_branch(BranchBehavior::Ok(2)),
+    ];
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), branches, None)
+        .await
+        .unwrap();
+    assert_eq!(batch.success_count(), 2);
+
+    let updates: Vec<_> = lambda_service
+        .checkpoint_calls()
+        .into_iter()
+        .flat_map(|call| call.updates)
+        .collect();
+    let update = updates
+        .iter()
+        .find(|update| {
+            update.operation_type == OperationType::Context
+                && update.sub_type.as_deref() == Some("Parallel")
+                && update.action == OperationAction::Succeed
+        })
+        .expect("parallel completion update");
+
+    assert_ne!(
+        update
+            .context_options
+            .as_ref()
+            .and_then(|o| o.replay_children),
+        Some(true)
+    );
+
+    let payload = update.payload.as_deref().expect("parallel payload");
+    let value: serde_json::Value = serde_json::from_str(payload).expect("json payload");
+    assert_eq!(
+        value.get("kind").and_then(|k| k.as_str()),
+        Some("BatchResult")
+    );
+}
+
+#[tokio::test]
+async fn test_parallel_replay_full_batch_payload_returns_without_children() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let payload = json!({
+        "kind": "BatchResult",
+        "completion_reason": "ALL_COMPLETED",
+        "items": [
+            { "index": 0, "status": "SUCCEEDED", "result": 1 },
+            { "index": 1, "status": "FAILED", "error": "boom" },
+        ],
+    })
+    .to_string();
+    let op = json!({
+        "Id": hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": payload },
+    });
+
+    let ctx = make_replay_context(arn, vec![op]).await;
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run when replaying full batch payload");
+        #[allow(unreachable_code)]
+        Ok::<u32, DurableError>(0)
+    };
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), vec![branch, branch], None)
+        .await
+        .unwrap();
+
+    assert_eq!(batch.completion_reason, BatchCompletionReason::AllCompleted);
+    assert_eq!(batch.success_count(), 1);
+    assert_eq!(batch.failure_count(), 1);
+
+    let succeeded = batch.succeeded();
+    assert_eq!(succeeded.len(), 1);
+    assert_eq!(succeeded[0].index, 0);
+    assert_eq!(succeeded[0].result, Some(1));
+
+    let failed = batch.failed();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].index, 1);
+    match failed[0].error.as_deref() {
+        Some(DurableError::Internal(message)) => assert_eq!(message, "boom"),
+        Some(other) => panic!("unexpected error: {other:?}"),
+        None => panic!("missing error"),
+    }
+}
+
+#[tokio::test]
+async fn test_parallel_replay_children_reconstructs_without_running_branches() {
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let parallel_hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let summary = json!({
+        "type": "ParallelResult",
+        "totalCount": 2,
+        "successCount": 2,
+        "failureCount": 0,
+        "startedCount": 0,
+        "completionReason": "ALL_COMPLETED",
+        "status": "SUCCEEDED",
+    })
+    .to_string();
+    let parallel_op = json!({
+        "Id": parallel_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary, "ReplayChildren": true },
+    });
+
+    let branch_0_name = "parallel-branch-0".to_string();
+    let branch_0_step_id = format!("{branch_0_name}_{}", 1);
+    let branch_0_hashed_id = CheckpointManager::hash_id(&branch_0_step_id);
+    let branch_0_result = serde_json::to_string(&1u32).unwrap();
+    let branch_0_op = json!({
+        "Id": branch_0_hashed_id,
+        "ParentId": parallel_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": branch_0_result },
+    });
+
+    let branch_1_name = "parallel-branch-1".to_string();
+    let branch_1_step_id = format!("{branch_1_name}_{}", 2);
+    let branch_1_hashed_id = CheckpointManager::hash_id(&branch_1_step_id);
+    let branch_1_result = serde_json::to_string(&2u32).unwrap();
+    let branch_1_op = json!({
+        "Id": branch_1_hashed_id,
+        "ParentId": parallel_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": branch_1_result },
+    });
+
+    let lambda_service = Arc::new(MockLambdaService::new());
+    for _ in 0..3 {
+        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    }
+    let ctx = make_replay_context_with_service(
+        arn,
+        vec![parallel_op, branch_0_op, branch_1_op],
+        lambda_service,
+    )
+    .await;
+
+    let branch = |_ctx: DurableContextHandle| async move {
+        panic!("branch should not run in ReplayChildren mode");
+        #[allow(unreachable_code)]
+        Ok::<u32, DurableError>(0)
+    };
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), vec![branch, branch], None)
+        .await
+        .unwrap();
+
+    assert_eq!(batch.success_count(), 2);
+    let results: Vec<u32> = batch
+        .succeeded()
+        .into_iter()
+        .map(|item| item.result.expect("result"))
+        .collect();
+    assert_eq!(results, vec![1, 2]);
+}
+
+#[tokio::test]
 async fn test_parallel_replay_batch_serdes_returns_batch() {
     let arn = "arn:test:durable";
     let step_id = "parallel_0".to_string();

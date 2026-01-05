@@ -21,7 +21,10 @@ impl DurableContextHandle {
         F: Fn(TIn, DurableContextHandle, usize) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = DurableResult<TOut>> + Send + 'static,
     {
-        let cfg = config.unwrap_or_default();
+        let mut cfg = config.unwrap_or_default();
+        if cfg.serdes.is_none() {
+            cfg.serdes = Some(Arc::new(BatchResultSerdes));
+        }
         let map_fn = Arc::new(map_fn);
         let items_len = items.len();
         validate_completion_config(&cfg.completion_config, items_len, name.unwrap_or("map"))?;

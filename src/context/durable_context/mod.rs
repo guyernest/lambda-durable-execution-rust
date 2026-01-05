@@ -54,11 +54,11 @@ use crate::context::{ExecutionContext, ExecutionMode, StepContext};
 use crate::error::{DurableError, DurableResult, ErrorObject};
 use crate::retry::presets;
 use crate::types::{
-    BatchItem, BatchItemStatus, BatchResult, CallbackConfig, ChainedInvokeUpdateOptions,
-    ChildContextConfig, ContextUpdateOptions, DurableLogData, DurableLogLevel, Duration,
-    InvokeConfig, MapConfig, NamedParallelBranch, OperationAction, OperationStatus, OperationType,
-    OperationUpdate, ParallelConfig, Serdes, StepConfig, StepSemantics, WaitConditionConfig,
-    WaitConditionDecision,
+    BatchItem, BatchItemStatus, BatchResult, BatchResultSerdes, CallbackConfig,
+    ChainedInvokeUpdateOptions, ChildContextConfig, ContextUpdateOptions, DurableLogData,
+    DurableLogLevel, Duration, InvokeConfig, MapConfig, NamedParallelBranch, OperationAction,
+    OperationStatus, OperationType, OperationUpdate, ParallelConfig, Serdes, StepConfig,
+    StepSemantics, WaitConditionConfig, WaitConditionDecision,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashSet;

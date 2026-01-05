@@ -161,45 +161,73 @@ where
                 completion_reason,
             };
 
-            let payload = if let Some(batch_serdes) = batch_serdes.clone() {
-                safe_serialize_required_with_serdes(
+            let (payload, replay_children) = if let Some(batch_serdes) = batch_serdes.clone() {
+                let payload = safe_serialize_required_with_serdes(
                     batch_serdes,
                     &batch_result,
                     &par_hashed_id,
                     name,
                     &inner.execution_ctx,
                 )
-                .await
+                .await;
+
+                if payload.len() > CHECKPOINT_SIZE_LIMIT_BYTES {
+                    let summary = safe_serialize(
+                        None,
+                        Some(&parallel_summary_payload(
+                            total_count,
+                            success_count,
+                            failure_count,
+                            started_count,
+                            completion_reason,
+                        )),
+                        &par_hashed_id,
+                        name,
+                        &inner.execution_ctx,
+                    )
+                    .await
+                    .expect("summary payload must be present");
+                    (summary, true)
+                } else {
+                    (payload, false)
+                }
             } else {
-                safe_serialize(
-                    None,
-                    Some(&parallel_summary_payload(
-                        total_count,
-                        success_count,
-                        failure_count,
-                        started_count,
-                        completion_reason,
-                    )),
-                    &par_hashed_id,
-                    name,
-                    &inner.execution_ctx,
+                (
+                    safe_serialize(
+                        None,
+                        Some(&parallel_summary_payload(
+                            total_count,
+                            success_count,
+                            failure_count,
+                            started_count,
+                            completion_reason,
+                        )),
+                        &par_hashed_id,
+                        name,
+                        &inner.execution_ctx,
+                    )
+                    .await
+                    .expect("summary payload must be present"),
+                    false,
                 )
-                .await
-                .expect("summary payload must be present")
             };
 
-            let succeed_update = OperationUpdate::builder()
+            let mut builder = OperationUpdate::builder()
                 .id(&par_hashed_id)
                 .operation_type(OperationType::Context)
                 .sub_type("Parallel")
                 .action(OperationAction::Succeed)
-                .payload(payload)
-                .build()
-                .map_err(|e| {
-                    DurableError::Internal(format!(
-                        "Failed to build parallel completion update: {e}"
-                    ))
-                })?;
+                .payload(payload);
+
+            if replay_children {
+                builder = builder.context_options(ContextUpdateOptions {
+                    replay_children: Some(true),
+                });
+            }
+
+            let succeed_update = builder.build().map_err(|e| {
+                DurableError::Internal(format!("Failed to build parallel completion update: {e}"))
+            })?;
             inner
                 .execution_ctx
                 .checkpoint_manager
@@ -236,43 +264,73 @@ where
         completion_reason,
     };
 
-    let payload = if let Some(batch_serdes) = batch_serdes {
-        safe_serialize_required_with_serdes(
+    let (payload, replay_children) = if let Some(batch_serdes) = batch_serdes {
+        let payload = safe_serialize_required_with_serdes(
             batch_serdes,
             &batch_result,
             &par_hashed_id,
             name,
             &inner.execution_ctx,
         )
-        .await
+        .await;
+
+        if payload.len() > CHECKPOINT_SIZE_LIMIT_BYTES {
+            let summary = safe_serialize(
+                None,
+                Some(&parallel_summary_payload(
+                    completed_count,
+                    success_count,
+                    failure_count,
+                    0,
+                    completion_reason,
+                )),
+                &par_hashed_id,
+                name,
+                &inner.execution_ctx,
+            )
+            .await
+            .expect("summary payload must be present");
+            (summary, true)
+        } else {
+            (payload, false)
+        }
     } else {
-        safe_serialize(
-            None,
-            Some(&parallel_summary_payload(
-                completed_count,
-                success_count,
-                failure_count,
-                0,
-                completion_reason,
-            )),
-            &par_hashed_id,
-            name,
-            &inner.execution_ctx,
+        (
+            safe_serialize(
+                None,
+                Some(&parallel_summary_payload(
+                    completed_count,
+                    success_count,
+                    failure_count,
+                    0,
+                    completion_reason,
+                )),
+                &par_hashed_id,
+                name,
+                &inner.execution_ctx,
+            )
+            .await
+            .expect("summary payload must be present"),
+            false,
         )
-        .await
-        .expect("summary payload must be present")
     };
 
-    let succeed_update = OperationUpdate::builder()
+    let mut builder = OperationUpdate::builder()
         .id(&par_hashed_id)
         .operation_type(OperationType::Context)
         .sub_type("Parallel")
         .action(OperationAction::Succeed)
-        .payload(payload)
-        .build()
-        .map_err(|e| {
-            DurableError::Internal(format!("Failed to build parallel completion update: {e}"))
-        })?;
+        .payload(payload);
+
+    if replay_children {
+        builder = builder.context_options(ContextUpdateOptions {
+            replay_children: Some(true),
+        });
+    }
+
+    let succeed_update = builder.build().map_err(|e| {
+        DurableError::Internal(format!("Failed to build parallel completion update: {e}"))
+    })?;
     inner
         .execution_ctx
         .checkpoint_manager

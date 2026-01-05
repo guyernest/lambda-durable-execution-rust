@@ -114,6 +114,7 @@
 //! - `AtMostOncePerRetry` - Interrupted attempts move to the next retry cycle
 
 mod batch;
+mod batch_serdes;
 mod config;
 mod duration;
 mod invocation;
@@ -122,6 +123,7 @@ mod logger;
 mod serdes;
 
 pub use batch::*;
+pub use batch_serdes::*;
 pub use config::*;
 pub use duration::*;
 pub use invocation::*;

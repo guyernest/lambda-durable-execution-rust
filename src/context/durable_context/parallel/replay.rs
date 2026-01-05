@@ -32,43 +32,67 @@ where
             });
         }
         OperationStatus::Succeeded => {
+            if op.context_details.as_ref().and_then(|d| d.replay_children) == Some(true) {
+                execution_ctx.set_mode(ExecutionMode::Execution).await;
+                return Ok(None);
+            }
+
             if let Some(payload) = op.context_details.as_ref().and_then(|d| d.result.as_ref()) {
-                if let Some(batch_serdes) = batch_serdes.clone() {
-                    let batch: BatchResult<T> = safe_deserialize_required_with_serdes(
-                        batch_serdes,
-                        payload,
-                        par_hashed_id,
-                        name,
-                        execution_ctx,
-                    )
-                    .await;
+                let is_summary = serde_json::from_str::<serde_json::Value>(payload)
+                    .ok()
+                    .and_then(|v| {
+                        v.as_object().map(|obj| {
+                            let kind_is_batch =
+                                obj.get("kind").and_then(|k| k.as_str()) == Some("BatchResult");
+                            if kind_is_batch {
+                                return false;
+                            }
 
-                    let target_total_count = batch
-                        .all
-                        .iter()
-                        .map(|i| i.index)
-                        .max()
-                        .map(|m| m + 1)
-                        .unwrap_or(0);
+                            obj.get("type").and_then(|t| t.as_str()) == Some("ParallelResult")
+                                || obj.get("totalCount").is_some()
+                        })
+                    })
+                    .unwrap_or(false);
 
-                    if target_total_count > branches.len() {
-                        return Err(DurableError::ReplayValidationFailed {
-                            expected: format!("parallel totalCount <= {}", branches.len()),
-                            actual: target_total_count.to_string(),
-                        });
+                if !is_summary {
+                    if let Some(batch_serdes) = batch_serdes.clone() {
+                        let batch: BatchResult<T> = safe_deserialize_required_with_serdes(
+                            batch_serdes,
+                            payload,
+                            par_hashed_id,
+                            name,
+                            execution_ctx,
+                        )
+                        .await;
+
+                        let target_total_count = batch
+                            .all
+                            .iter()
+                            .map(|i| i.index)
+                            .max()
+                            .map(|m| m + 1)
+                            .unwrap_or(0);
+
+                        if target_total_count > branches.len() {
+                            return Err(DurableError::ReplayValidationFailed {
+                                expected: format!("parallel totalCount <= {}", branches.len()),
+                                actual: target_total_count.to_string(),
+                            });
+                        }
+
+                        // Consume child context operation IDs to keep the parent context counter in sync.
+                        for (index, branch) in branches.iter().enumerate().take(target_total_count)
+                        {
+                            let base = name.unwrap_or("parallel");
+                            let branch_name = branch
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| format!("{base}-branch-{index}"));
+                            let _ = execution_ctx.next_operation_id(Some(&branch_name));
+                        }
+
+                        return Ok(Some(batch));
                     }
-
-                    // Consume child context operation IDs to keep the parent context counter in sync.
-                    for (index, branch) in branches.iter().enumerate().take(target_total_count) {
-                        let base = name.unwrap_or("parallel");
-                        let branch_name = branch
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| format!("{base}-branch-{index}"));
-                        let _ = execution_ctx.next_operation_id(Some(&branch_name));
-                    }
-
-                    return Ok(Some(batch));
                 }
             }
 

@@ -35,7 +35,10 @@ impl DurableContextHandle {
         F: Fn(DurableContextHandle) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = DurableResult<T>> + Send + 'static,
     {
-        let cfg = config.unwrap_or_default();
+        let mut cfg = config.unwrap_or_default();
+        if cfg.serdes.is_none() {
+            cfg.serdes = Some(Arc::new(BatchResultSerdes));
+        }
         let branches_len = branches.len();
         validate_completion_config(
             &cfg.completion_config,
