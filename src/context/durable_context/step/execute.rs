@@ -12,7 +12,7 @@ pub(super) async fn run_step_execution<T, F, Fut>(
     semantics: StepSemantics,
     retry_strategy: Arc<dyn RetryStrategy>,
     serdes: Option<Arc<dyn Serdes<T>>>,
-    parent_id: Option<String>,
+    parent_id: Option<&str>,
 ) -> DurableResult<T>
 where
     T: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -34,7 +34,7 @@ where
             .operation_type(OperationType::Step)
             .sub_type("Step")
             .action(OperationAction::Start);
-        if let Some(ref pid) = parent_id {
+        if let Some(pid) = parent_id {
             builder = builder.parent_id(pid);
         }
         if let Some(n) = name {
@@ -92,7 +92,7 @@ where
                 .sub_type("Step")
                 .action(OperationAction::Succeed);
 
-            if let Some(ref pid) = parent_id {
+            if let Some(pid) = parent_id {
                 builder = builder.parent_id(pid);
             }
             if let Some(n) = name {
@@ -135,7 +135,7 @@ where
                         next_attempt_delay_seconds: Some(delay.to_seconds_i32_saturating()),
                     });
 
-                if let Some(ref pid) = parent_id {
+                if let Some(pid) = parent_id {
                     builder = builder.parent_id(pid);
                 }
                 if let Some(n) = name {
@@ -175,7 +175,7 @@ where
                 .action(OperationAction::Fail)
                 .error(error_obj);
 
-            if let Some(ref pid) = parent_id {
+            if let Some(pid) = parent_id {
                 builder = builder.parent_id(pid);
             }
             if let Some(n) = name {
@@ -375,7 +375,7 @@ mod tests {
             StepSemantics::AtMostOncePerRetry,
             Arc::new(NoRetry),
             None,
-            Some("parent".to_string()),
+            Some("parent"),
         )
         .await
         .expect("step should succeed");

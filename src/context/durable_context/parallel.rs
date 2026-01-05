@@ -56,7 +56,7 @@ impl DurableContextHandle {
             .await
             .is_none()
         {
-            let parent_id = self.inner.execution_ctx.get_parent_id().await;
+            let parent_id = self.inner.execution_ctx.get_parent_id();
             let mut builder = OperationUpdate::builder()
                 .id(&par_hashed_id)
                 .operation_type(OperationType::Context)

@@ -234,7 +234,7 @@ async fn test_context_logger_includes_parent_operation_id() {
     let exec_ctx = ExecutionContext::new(&input, lambda_service, Some(logger), true)
         .await
         .expect("execution context should initialize");
-    exec_ctx.set_parent_id(Some("parent-op".to_string())).await;
+    let exec_ctx = exec_ctx.with_parent_id("parent-op".to_string());
     let ctx = DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx)));
 
     ctx.logger().info("parent");

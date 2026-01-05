@@ -11,7 +11,7 @@ pub(super) async fn handle_replay<T>(
     semantics: StepSemantics,
     retry_strategy: &Arc<dyn RetryStrategy>,
     serdes: Option<Arc<dyn Serdes<T>>>,
-    parent_id: &Option<String>,
+    parent_id: Option<&str>,
     execution_ctx: &ExecutionContext,
 ) -> DurableResult<Option<T>>
 where
@@ -94,7 +94,7 @@ where
                     .sub_type("Step")
                     .action(OperationAction::Fail)
                     .error(err_obj);
-                if let Some(ref pid) = parent_id {
+                if let Some(pid) = parent_id {
                     builder = builder.parent_id(pid);
                 }
                 if let Some(n) = name {
@@ -127,7 +127,7 @@ where
                 .step_options(crate::types::StepUpdateOptions {
                     next_attempt_delay_seconds: Some(delay.to_seconds_i32_saturating()),
                 });
-            if let Some(ref pid) = parent_id {
+            if let Some(pid) = parent_id {
                 builder = builder.parent_id(pid);
             }
             if let Some(n) = name {

@@ -154,11 +154,7 @@ async fn test_parallel_execution_empty_branches_without_batch_serdes() {
 #[tokio::test]
 async fn test_parallel_execution_includes_parent_id() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-parallel".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-parallel").await;
 
     for _ in 0..2 {
         lambda_service.expect_checkpoint(MockCheckpointConfig::default());

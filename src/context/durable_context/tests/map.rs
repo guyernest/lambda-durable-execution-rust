@@ -750,11 +750,7 @@ async fn test_map_replay_started_op_executes() {
 #[tokio::test]
 async fn test_map_execution_includes_parent_id() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-map".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-map").await;
 
     for _ in 0..4 {
         lambda_service.expect_checkpoint(MockCheckpointConfig::default());

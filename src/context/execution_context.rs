@@ -55,7 +55,7 @@ pub struct ExecutionContext {
     pub operation_counter: Arc<AtomicU64>,
 
     /// Current parent operation ID (for child contexts).
-    pub current_parent_id: Arc<Mutex<Option<String>>>,
+    pub current_parent_id: Option<String>,
 
     /// Pending completions being tracked.
     pub pending_completions: Arc<Mutex<std::collections::HashSet<String>>>,
@@ -149,7 +149,7 @@ impl ExecutionContext {
             step_data: Arc::new(Mutex::new(step_data)),
             mode: Arc::new(Mutex::new(mode)),
             operation_counter: Arc::new(AtomicU64::new(0)),
-            current_parent_id: Arc::new(Mutex::new(None)),
+            current_parent_id: None,
             pending_completions: Arc::new(Mutex::new(std::collections::HashSet::new())),
             logger: logger.unwrap_or_else(|| Arc::new(TracingLogger)),
             mode_aware_logging,
@@ -169,9 +169,15 @@ impl ExecutionContext {
     /// Generate a unique operation ID.
     pub fn next_operation_id(&self, name: Option<&str>) -> String {
         let counter = self.operation_counter.fetch_add(1, Ordering::SeqCst);
-        match name {
+        let base = match name {
             Some(n) => format!("{n}_{counter}"),
             None => format!("op_{counter}"),
+        };
+
+        if let Some(prefix) = self.current_parent_id.as_deref() {
+            format!("{prefix}:{base}")
+        } else {
+            base
         }
     }
 
@@ -180,20 +186,18 @@ impl ExecutionContext {
         self.step_data.lock().await.get(hashed_id).cloned()
     }
 
-    /// Get the current parent ID.
-    pub async fn get_parent_id(&self) -> Option<String> {
-        self.current_parent_id.lock().await.clone()
-    }
-
-    /// Set the current parent ID.
-    pub async fn set_parent_id(&self, parent_id: Option<String>) {
-        *self.current_parent_id.lock().await = parent_id;
+    /// Get the current parent ID for operations created within this context.
+    pub fn get_parent_id(&self) -> Option<&str> {
+        self.current_parent_id.as_deref()
     }
 
     /// Create a child context with a new parent ID.
     pub fn with_parent_id(&self, parent_id: String) -> Self {
         let mut child = self.clone();
-        child.current_parent_id = Arc::new(Mutex::new(Some(parent_id)));
+        child.current_parent_id = Some(parent_id);
+        // Child contexts must have independent counters to avoid non-deterministic
+        // operation IDs when executing concurrently.
+        child.operation_counter = Arc::new(AtomicU64::new(0));
         child
     }
 }
@@ -453,5 +457,11 @@ mod tests {
 
         assert_eq!(ctx.next_operation_id(Some("step")), "step_0");
         assert_eq!(ctx.next_operation_id(None), "op_1");
+
+        let child = ctx.with_parent_id("parent".to_string());
+        assert_eq!(child.next_operation_id(Some("step")), "parent:step_0");
+        assert_eq!(child.next_operation_id(None), "parent:op_1");
+
+        assert_eq!(ctx.next_operation_id(Some("step")), "step_2");
     }
 }

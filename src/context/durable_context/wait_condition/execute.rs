@@ -81,7 +81,7 @@ where
         .await
         .is_none()
     {
-        let parent_id = inner.execution_ctx.get_parent_id().await;
+        let parent_id = inner.execution_ctx.get_parent_id();
         let mut builder = OperationUpdate::builder()
             .id(&hashed_id)
             .operation_type(OperationType::Step)

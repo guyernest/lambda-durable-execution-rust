@@ -219,11 +219,7 @@ async fn test_wait_for_condition_execution_stop_succeeds() {
 #[tokio::test]
 async fn test_wait_for_condition_execution_continue_retries() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-wait".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-wait").await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());

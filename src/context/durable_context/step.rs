@@ -119,7 +119,7 @@ impl DurableContextImpl {
         let retry_strategy = config.retry_strategy.unwrap_or_else(|| presets::default());
         let serdes = config.serdes.clone();
 
-        let parent_id = self.execution_ctx.get_parent_id().await;
+        let parent_id = self.execution_ctx.get_parent_id();
         let operation = self.execution_ctx.get_step_data(&hashed_id).await;
 
         // Replay handling: short-circuit completed, surface failures, or suspend.
@@ -131,7 +131,7 @@ impl DurableContextImpl {
             semantics,
             &retry_strategy,
             serdes.clone(),
-            &parent_id,
+            parent_id,
             &self.execution_ctx,
         )
         .await?

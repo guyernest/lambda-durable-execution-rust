@@ -26,7 +26,7 @@ where
     .await;
 
     // Checkpoint START for chained invoke
-    let parent_id = ctx.execution_ctx.get_parent_id().await;
+    let parent_id = ctx.execution_ctx.get_parent_id();
     let mut builder = OperationUpdate::builder()
         .id(&hashed_id)
         .operation_type(OperationType::ChainedInvoke)

@@ -37,11 +37,7 @@ async fn test_create_callback_execution_checkpoints_start_with_options() {
 #[tokio::test]
 async fn test_create_callback_execution_includes_parent_id() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-callback".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-callback").await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 

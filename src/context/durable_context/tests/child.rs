@@ -107,11 +107,7 @@ async fn test_run_in_child_context_execution_without_payload() {
 #[tokio::test]
 async fn test_run_in_child_context_execution_includes_parent_id() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-context".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-context").await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
@@ -138,11 +134,7 @@ async fn test_run_in_child_context_execution_includes_parent_id() {
 #[tokio::test]
 async fn test_run_in_child_context_execution_failure_checkpoints_fail() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-context".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-context").await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
@@ -516,8 +508,9 @@ async fn test_child_context_replay_children_reconstructs_result() {
         "ContextDetails": { "ReplayChildren": true, "Result": "" },
     });
 
-    // Child steps share the parent's operation counter; the first child step uses counter 1.
-    let step_id = "step_1".to_string();
+    // Child steps use their own counter and are prefixed with the child context ID.
+    // The first child step uses counter 0.
+    let step_id = format!("{child_hashed_id}:step_0");
     let step_hashed_id = CheckpointManager::hash_id(&step_id);
     let step_result = serde_json::to_string(&42u32).unwrap();
     let step_op = json!({

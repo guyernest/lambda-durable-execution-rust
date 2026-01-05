@@ -713,9 +713,16 @@ Operations are identified by deterministic hashed IDs:
 // ExecutionContext generates sequential IDs
 fn next_operation_id(&self, name: Option<&str>) -> String {
     let counter = self.operation_counter.fetch_add(1, Ordering::SeqCst);
-    match name {
+    let base = match name {
         Some(n) => format!("{n}_{counter}"),  // e.g., "step_0", "fetch-data_1"
-        None => format!("op_{counter}"),       // e.g., "op_0", "op_1"
+        None => format!("op_{counter}"),      // e.g., "op_0", "op_1"
+    };
+
+    // Child contexts namespace operation IDs to stay deterministic under concurrency.
+    if let Some(prefix) = self.current_parent_id.as_deref() {
+        format!("{prefix}:{base}")
+    } else {
+        base
     }
 }
 

@@ -231,11 +231,7 @@ async fn test_invoke_execution_suspends_and_checkpoints() {
 #[tokio::test]
 async fn test_invoke_execution_includes_parent_id() {
     let arn = "arn:test:durable";
-    let (ctx, lambda_service) = make_execution_context(arn).await;
-
-    ctx.execution_context()
-        .set_parent_id(Some("parent-invoke".to_string()))
-        .await;
+    let (ctx, lambda_service) = make_execution_context_with_parent(arn, "parent-invoke").await;
 
     lambda_service.expect_checkpoint(MockCheckpointConfig::default());
 

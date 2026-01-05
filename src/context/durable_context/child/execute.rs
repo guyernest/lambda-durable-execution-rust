@@ -17,7 +17,7 @@ where
     // Checkpoint at start if not already started. This ensures any child operations that
     // reference `ParentId` (this context) are valid to the backend.
     if ctx.execution_ctx.get_step_data(&hashed_id).await.is_none() {
-        let parent_id = ctx.execution_ctx.get_parent_id().await;
+        let parent_id = ctx.execution_ctx.get_parent_id();
         let mut builder = OperationUpdate::builder()
             .id(&hashed_id)
             .operation_type(OperationType::Context)
@@ -54,7 +54,7 @@ where
         Ok(val) => val,
         Err(error) => {
             let err_obj = ErrorObject::from_durable_error(&error);
-            let parent_id = ctx.execution_ctx.get_parent_id().await;
+            let parent_id = ctx.execution_ctx.get_parent_id();
 
             let mut builder = OperationUpdate::builder()
                 .id(&hashed_id)
@@ -101,7 +101,7 @@ where
         }
     }
 
-    let parent_id = ctx.execution_ctx.get_parent_id().await;
+    let parent_id = ctx.execution_ctx.get_parent_id();
     let mut builder = OperationUpdate::builder()
         .id(&hashed_id)
         .operation_type(OperationType::Context)

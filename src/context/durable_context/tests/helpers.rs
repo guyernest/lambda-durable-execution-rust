@@ -92,6 +92,20 @@ pub(super) async fn make_execution_context(
     )
 }
 
+pub(super) async fn make_execution_context_with_parent(
+    durable_execution_arn: &str,
+    parent_id: &str,
+) -> (DurableContextHandle, Arc<MockLambdaService>) {
+    let (ctx, lambda_service) = make_execution_context(durable_execution_arn).await;
+    let exec_ctx = ctx
+        .execution_context()
+        .with_parent_id(parent_id.to_string());
+    (
+        DurableContextHandle::new(Arc::new(DurableContextImpl::new(exec_ctx))),
+        lambda_service,
+    )
+}
+
 pub(super) struct StaticBatchSerdes<T> {
     pub(super) items: Vec<(usize, BatchItemStatus, Option<T>)>,
     pub(super) completion_reason: BatchCompletionReason,

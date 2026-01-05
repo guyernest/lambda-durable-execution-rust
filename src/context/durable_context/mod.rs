@@ -310,14 +310,9 @@ impl DurableContextLogger {
     }
 
     fn log_data(&self) -> DurableLogData {
-        let operation_id = match self.execution_ctx.current_parent_id.try_lock() {
-            Ok(parent_id) => parent_id.clone(),
-            Err(_) => None,
-        };
-
         DurableLogData {
             durable_execution_arn: self.execution_ctx.durable_execution_arn.clone(),
-            operation_id,
+            operation_id: self.execution_ctx.current_parent_id.clone(),
             step_name: None,
             attempt: None,
         }
