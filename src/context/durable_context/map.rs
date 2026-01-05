@@ -71,22 +71,34 @@ impl DurableContextHandle {
                 .await?;
         }
 
-        // Replay handling: if the top-level map completed, reconstruct children and skip incomplete ones.
-        // Replay handling extracted to map::replay.
         if mode == ExecutionMode::Replay {
-            if let Some(result) = replay::maybe_replay_map(
+            match replay::evaluate_map_replay(
                 name,
                 &items,
                 &item_namer,
                 &batch_serdes,
-                &item_serdes,
                 &self.inner.execution_ctx,
                 &map_hashed_id,
                 &cfg.completion_config,
             )
             .await?
             {
-                return Ok(result);
+                replay::MapReplayDecision::Return(result) => return Ok(result),
+                replay::MapReplayDecision::Reconstruct { total_count } => {
+                    return replay::reconstruct_map_from_children(
+                        Arc::clone(&self.inner),
+                        name,
+                        items,
+                        Arc::clone(&map_fn),
+                        item_namer,
+                        item_serdes,
+                        &map_hashed_id,
+                        total_count,
+                        &cfg.completion_config,
+                    )
+                    .await;
+                }
+                replay::MapReplayDecision::Continue => {}
             }
         }
 

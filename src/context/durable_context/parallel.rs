@@ -87,18 +87,30 @@ impl DurableContextHandle {
 
         // Replay handling: reconstruct completed branches only.
         if mode == ExecutionMode::Replay {
-            if let Some(result) = replay::maybe_replay_parallel(
+            match replay::evaluate_parallel_replay(
                 name,
                 &branches,
                 &batch_serdes,
-                &item_serdes,
                 &self.inner.execution_ctx,
                 &par_hashed_id,
                 &cfg.completion_config,
             )
             .await?
             {
-                return Ok(result);
+                replay::ParallelReplayDecision::Return(result) => return Ok(result),
+                replay::ParallelReplayDecision::Reconstruct { total_count } => {
+                    return replay::reconstruct_parallel_from_children(
+                        Arc::clone(&self.inner),
+                        name,
+                        branches,
+                        item_serdes,
+                        &par_hashed_id,
+                        total_count,
+                        &cfg.completion_config,
+                    )
+                    .await;
+                }
+                replay::ParallelReplayDecision::Continue => {}
             }
         }
 

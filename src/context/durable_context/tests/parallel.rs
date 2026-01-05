@@ -687,16 +687,7 @@ async fn test_parallel_replay_children_reconstructs_without_running_branches() {
         "ContextDetails": { "Result": branch_1_result },
     });
 
-    let lambda_service = Arc::new(MockLambdaService::new());
-    for _ in 0..3 {
-        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
-    }
-    let ctx = make_replay_context_with_service(
-        arn,
-        vec![parallel_op, branch_0_op, branch_1_op],
-        lambda_service,
-    )
-    .await;
+    let ctx = make_replay_context(arn, vec![parallel_op, branch_0_op, branch_1_op]).await;
 
     let branch = |_ctx: DurableContextHandle| async move {
         panic!("branch should not run in ReplayChildren mode");
@@ -716,6 +707,66 @@ async fn test_parallel_replay_children_reconstructs_without_running_branches() {
         .map(|item| item.result.expect("result"))
         .collect();
     assert_eq!(results, vec![1, 2]);
+}
+
+#[tokio::test]
+async fn test_parallel_replay_children_reconstructs_child_replay_children_by_running_branch() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let arn = "arn:test:durable";
+    let step_id = "parallel_0".to_string();
+    let parallel_hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let summary = json!({
+        "type": "ParallelResult",
+        "totalCount": 1,
+        "successCount": 1,
+        "failureCount": 0,
+        "startedCount": 0,
+        "completionReason": "ALL_COMPLETED",
+        "status": "SUCCEEDED",
+    })
+    .to_string();
+    let parallel_op = json!({
+        "Id": parallel_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "Parallel",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary, "ReplayChildren": true },
+    });
+
+    let branch_0_name = "parallel-branch-0".to_string();
+    let branch_0_step_id = format!("{branch_0_name}_{}", 1);
+    let branch_0_hashed_id = CheckpointManager::hash_id(&branch_0_step_id);
+    let branch_0_op = json!({
+        "Id": branch_0_hashed_id,
+        "ParentId": parallel_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "ParallelBranch",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "", "ReplayChildren": true },
+    });
+
+    let ctx = make_replay_context(arn, vec![parallel_op, branch_0_op]).await;
+    let called = Arc::new(AtomicUsize::new(0));
+
+    let called_clone = Arc::clone(&called);
+    let branch = move |_ctx: DurableContextHandle| {
+        let called = Arc::clone(&called_clone);
+        async move {
+            called.fetch_add(1, Ordering::SeqCst);
+            Ok::<u32, DurableError>(123)
+        }
+    };
+
+    let batch: BatchResult<u32> = ctx
+        .parallel(Some("parallel"), vec![branch], None)
+        .await
+        .unwrap();
+
+    assert_eq!(called.load(Ordering::SeqCst), 1);
+    assert_eq!(batch.success_count(), 1);
+    assert_eq!(batch.succeeded()[0].result, Some(123));
 }
 
 #[tokio::test]

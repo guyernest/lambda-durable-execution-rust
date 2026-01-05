@@ -1,23 +1,29 @@
 use super::super::*;
 
+#[derive(Debug)]
+pub(super) enum MapReplayDecision<TOut> {
+    Return(BatchResult<TOut>),
+    Reconstruct { total_count: usize },
+    Continue,
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
-pub(super) async fn maybe_replay_map<TIn, TOut>(
+pub(super) async fn evaluate_map_replay<TIn, TOut>(
     name: Option<&str>,
     items: &[TIn],
     item_namer: &Option<Arc<dyn Fn(&TIn, usize) -> String + Send + Sync>>,
     batch_serdes: &Option<Arc<dyn Serdes<BatchResult<TOut>>>>,
-    item_serdes: &Option<Arc<dyn Serdes<TOut>>>,
     execution_ctx: &ExecutionContext,
     map_hashed_id: &str,
-    completion_config: &crate::types::CompletionConfig,
-) -> DurableResult<Option<BatchResult<TOut>>>
+    _completion_config: &crate::types::CompletionConfig,
+) -> DurableResult<MapReplayDecision<TOut>>
 where
     TIn: Serialize + DeserializeOwned + Send + 'static,
     TOut: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let Some(op) = execution_ctx.get_step_data(map_hashed_id).await else {
-        return Ok(None);
+        return Ok(MapReplayDecision::Continue);
     };
 
     match op.status {
@@ -28,33 +34,28 @@ where
                 .and_then(|d| d.error.as_ref())
                 .map(|e| e.error_message.clone())
                 .unwrap_or_else(|| "Batch operation failed".to_string());
-            return Err(DurableError::BatchOperationFailed {
+            Err(DurableError::BatchOperationFailed {
                 name: name.unwrap_or("map").to_string(),
                 message: msg,
                 successful_count: 0,
                 failed_count: 0,
-            });
+            })
         }
         OperationStatus::Succeeded => {
-            if op.context_details.as_ref().and_then(|d| d.replay_children) == Some(true) {
-                execution_ctx.set_mode(ExecutionMode::Execution).await;
-                return Ok(None);
-            }
-
             if let Some(payload) = op.context_details.as_ref().and_then(|d| d.result.as_ref()) {
-                let is_summary = serde_json::from_str::<serde_json::Value>(payload)
-                    .ok()
-                    .and_then(|v| {
-                        v.as_object().map(|obj| {
-                            let kind_is_batch =
-                                obj.get("kind").and_then(|k| k.as_str()) == Some("BatchResult");
-                            if kind_is_batch {
-                                return false;
-                            }
+                let parsed = serde_json::from_str::<serde_json::Value>(payload).ok();
+                let is_summary = parsed
+                    .as_ref()
+                    .and_then(|v| v.as_object())
+                    .map(|obj| {
+                        let kind_is_batch =
+                            obj.get("kind").and_then(|k| k.as_str()) == Some("BatchResult");
+                        if kind_is_batch {
+                            return false;
+                        }
 
-                            obj.get("type").and_then(|t| t.as_str()) == Some("MapResult")
-                                || obj.get("totalCount").is_some()
-                        })
+                        obj.get("type").and_then(|t| t.as_str()) == Some("MapResult")
+                            || obj.get("totalCount").is_some()
                     })
                     .unwrap_or(false);
 
@@ -94,137 +95,197 @@ where
                             let _ = execution_ctx.next_operation_id(Some(&item_name));
                         }
 
-                        return Ok(Some(batch));
+                        return Ok(MapReplayDecision::Return(batch));
                     }
-                }
-            }
-
-            let target_total_count = op
-                .context_details
-                .as_ref()
-                .and_then(|d| d.result.as_ref())
-                .and_then(|payload| {
-                    serde_json::from_str::<serde_json::Value>(payload)
-                        .ok()
+                } else {
+                    let total_count = parsed
+                        .as_ref()
                         .and_then(|v| v.get("totalCount").and_then(|tc| tc.as_u64()))
-                })
-                .map(|tc| tc as usize);
+                        .map(|tc| tc as usize);
 
-            if let Some(target_total_count) = target_total_count {
-                let mut successes = Vec::new();
-                let mut failures = Vec::new();
-                let mut started = Vec::new();
-                let mut seen_count = 0usize;
-
-                for (index, item) in items.iter().enumerate() {
-                    if seen_count >= target_total_count {
-                        break;
-                    }
-
-                    let item_name = if let Some(ref namer) = item_namer {
-                        namer(item, index)
-                    } else {
-                        format!("{}-item-{}", name.unwrap_or("map"), index)
-                    };
-
-                    let child_step_id = execution_ctx.next_operation_id(Some(&item_name));
-                    let child_hashed_id = DurableContextImpl::hash_id(&child_step_id);
-
-                    if let Some(child_op) = execution_ctx.get_step_data(&child_hashed_id).await {
-                        seen_count += 1;
-
-                        match child_op.status {
-                            OperationStatus::Succeeded => {
-                                if let Some(ref details) = child_op.context_details {
-                                    if let Some(ref payload) = details.result {
-                                        let val: TOut = safe_deserialize(
-                                            item_serdes.clone(),
-                                            Some(payload.as_str()),
-                                            &child_hashed_id,
-                                            Some(&item_name),
-                                            execution_ctx,
-                                        )
-                                        .await
-                                        .ok_or_else(|| {
-                                            DurableError::Internal(
-                                                "Missing child context output in replay"
-                                                    .to_string(),
-                                            )
-                                        })?;
-                                        successes.push((index, val));
-                                    }
-                                }
-                            }
-                            OperationStatus::Failed => {
-                                let msg = child_op
-                                    .context_details
-                                    .as_ref()
-                                    .and_then(|d| d.error.as_ref())
-                                    .map(|e| e.error_message.clone())
-                                    .unwrap_or_else(|| "Child context failed".to_string());
-                                failures.push((
-                                    index,
-                                    DurableError::ChildContextFailed {
-                                        name: child_step_id,
-                                        message: msg,
-                                        source: None,
-                                    },
-                                ));
-                            }
-                            _ => started.push(index),
+                    if let Some(total_count) = total_count {
+                        if total_count > items.len() {
+                            return Err(DurableError::ReplayValidationFailed {
+                                expected: format!("map totalCount <= {}", items.len()),
+                                actual: total_count.to_string(),
+                            });
                         }
+
+                        return Ok(MapReplayDecision::Reconstruct { total_count });
                     }
                 }
-
-                let completed_count = successes.len() + failures.len();
-                let completion_reason = compute_batch_completion_reason(
-                    failures.len(),
-                    successes.len(),
-                    completed_count,
-                    items.len(),
-                    completion_config,
-                );
-
-                let mut all = Vec::new();
-                for (i, v) in successes {
-                    all.push(BatchItem {
-                        index: i,
-                        status: BatchItemStatus::Succeeded,
-                        result: Some(v),
-                        error: None,
-                    });
-                }
-                for (i, e) in failures {
-                    all.push(BatchItem {
-                        index: i,
-                        status: BatchItemStatus::Failed,
-                        result: None,
-                        error: Some(Arc::new(e)),
-                    });
-                }
-                for i in started {
-                    all.push(BatchItem {
-                        index: i,
-                        status: BatchItemStatus::Started,
-                        result: None,
-                        error: None,
-                    });
-                }
-                all.sort_by_key(|i| i.index);
-
-                return Ok(Some(BatchResult {
-                    all,
-                    completion_reason,
-                }));
             }
+
+            Ok(MapReplayDecision::Continue)
         }
         _ => {
             // Incomplete top-level map during replay; continue execution.
             execution_ctx.set_mode(ExecutionMode::Execution).await;
+            Ok(MapReplayDecision::Continue)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+pub(super) async fn reconstruct_map_from_children<TIn, TOut, F, Fut>(
+    inner: Arc<DurableContextImpl>,
+    name: Option<&str>,
+    items: Vec<TIn>,
+    map_fn: Arc<F>,
+    item_namer: Option<Arc<dyn Fn(&TIn, usize) -> String + Send + Sync>>,
+    item_serdes: Option<Arc<dyn Serdes<TOut>>>,
+    map_hashed_id: &str,
+    total_count: usize,
+    completion_config: &crate::types::CompletionConfig,
+) -> DurableResult<BatchResult<TOut>>
+where
+    TIn: Serialize + DeserializeOwned + Send + 'static,
+    TOut: Serialize + DeserializeOwned + Send + Sync + 'static,
+    F: Fn(TIn, DurableContextHandle, usize) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = DurableResult<TOut>> + Send + 'static,
+{
+    if total_count > items.len() {
+        return Err(DurableError::ReplayValidationFailed {
+            expected: format!("map totalCount <= {}", items.len()),
+            actual: total_count.to_string(),
+        });
+    }
+
+    let items_len = items.len();
+    let item_serdes = item_serdes;
+
+    let map_parent_execution_ctx = inner
+        .execution_ctx
+        .with_parent_id(map_hashed_id.to_string());
+    let map_parent_impl = Arc::new(DurableContextImpl::new(map_parent_execution_ctx));
+
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+    let mut started = Vec::new();
+
+    for (index, item) in items.into_iter().enumerate().take(total_count) {
+        let item_name = if let Some(ref namer) = item_namer {
+            namer(&item, index)
+        } else {
+            format!("{}-item-{}", name.unwrap_or("map"), index)
+        };
+
+        let child_step_id = inner.execution_ctx.next_operation_id(Some(&item_name));
+        let child_hashed_id = DurableContextImpl::hash_id(&child_step_id);
+        let Some(child_op) = inner.execution_ctx.get_step_data(&child_hashed_id).await else {
+            return Err(DurableError::ReplayValidationFailed {
+                expected: format!("map child context present for index {}", index),
+                actual: "missing".to_string(),
+            });
+        };
+
+        match child_op.status {
+            OperationStatus::Succeeded => {
+                if child_op
+                    .context_details
+                    .as_ref()
+                    .and_then(|d| d.replay_children)
+                    == Some(true)
+                {
+                    let map_fn = Arc::clone(&map_fn);
+                    let res = map_parent_impl
+                        .run_in_child_context_with_ids(
+                            child_step_id.clone(),
+                            child_hashed_id,
+                            Some(&item_name),
+                            move |child_ctx| map_fn(item, child_ctx, index),
+                            Some(ChildContextConfig::<TOut> {
+                                sub_type: Some("MapIteration".to_string()),
+                                serdes: item_serdes.clone(),
+                                ..Default::default()
+                            }),
+                        )
+                        .await;
+
+                    match res {
+                        Ok(v) => successes.push((index, v)),
+                        Err(e) => failures.push((index, e)),
+                    }
+                } else {
+                    let payload = child_op
+                        .context_details
+                        .as_ref()
+                        .and_then(|d| d.result.as_deref());
+                    let val: TOut = safe_deserialize(
+                        item_serdes.clone(),
+                        payload,
+                        &child_hashed_id,
+                        Some(&item_name),
+                        &inner.execution_ctx,
+                    )
+                    .await
+                    .ok_or_else(|| {
+                        DurableError::Internal("Missing child context output in replay".to_string())
+                    })?;
+                    successes.push((index, val));
+                }
+            }
+            OperationStatus::Failed => {
+                let msg = child_op
+                    .context_details
+                    .as_ref()
+                    .and_then(|d| d.error.as_ref())
+                    .map(|e| e.error_message.clone())
+                    .unwrap_or_else(|| "Child context failed".to_string());
+                failures.push((
+                    index,
+                    DurableError::ChildContextFailed {
+                        name: child_step_id,
+                        message: msg,
+                        source: None,
+                    },
+                ));
+            }
+            _ => started.push(index),
         }
     }
 
-    Ok(None)
+    let completed_count = successes.len() + failures.len();
+    let completion_reason = compute_batch_completion_reason(
+        failures.len(),
+        successes.len(),
+        completed_count,
+        items_len,
+        completion_config,
+    );
+
+    let mut all = Vec::new();
+    for (i, v) in successes {
+        all.push(BatchItem {
+            index: i,
+            status: BatchItemStatus::Succeeded,
+            result: Some(v),
+            error: None,
+        });
+    }
+    for (i, e) in failures {
+        all.push(BatchItem {
+            index: i,
+            status: BatchItemStatus::Failed,
+            result: None,
+            error: Some(Arc::new(e)),
+        });
+    }
+    for i in started {
+        all.push(BatchItem {
+            index: i,
+            status: BatchItemStatus::Started,
+            result: None,
+            error: None,
+        });
+    }
+    all.sort_by_key(|i| i.index);
+
+    Ok(BatchResult {
+        all,
+        completion_reason,
+    })
 }
 
 #[cfg(test)]
@@ -322,10 +383,9 @@ mod tests {
 
         let map_step_id = "map_0".to_string();
         let map_hashed_id = CheckpointManager::hash_id(&map_step_id);
-        let result = maybe_replay_map::<u32, u32>(
+        let result = evaluate_map_replay::<u32, u32>(
             Some("map"),
             &[1u32],
-            &None,
             &None,
             &None,
             &execution_ctx,
@@ -335,7 +395,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(result.is_none());
+        assert!(matches!(result, MapReplayDecision::Continue));
     }
 
     #[tokio::test]
@@ -353,10 +413,9 @@ mod tests {
         let execution_ctx = make_execution_context(arn, vec![map_op]).await;
         assert_eq!(execution_ctx.get_mode().await, ExecutionMode::Replay);
 
-        let result = maybe_replay_map::<u32, u32>(
+        let result = evaluate_map_replay::<u32, u32>(
             Some("map"),
             &[1u32],
-            &None,
             &None,
             &None,
             &execution_ctx,
@@ -366,7 +425,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(result.is_none());
+        assert!(matches!(result, MapReplayDecision::Continue));
         assert_eq!(execution_ctx.get_mode().await, ExecutionMode::Execution);
     }
 
@@ -392,19 +451,21 @@ mod tests {
             completion_reason: BatchCompletionReason::FailureToleranceExceeded,
         };
 
-        let result = maybe_replay_map::<u32, u32>(
+        let result = evaluate_map_replay::<u32, u32>(
             Some("map"),
             &[1u32, 2u32],
             &None,
             &Some(Arc::new(batch_serdes)),
-            &None,
             &execution_ctx,
             &map_hashed_id,
             &CompletionConfig::new(),
         )
         .await
-        .unwrap()
-        .expect("batch result");
+        .unwrap();
+
+        let MapReplayDecision::Return(result) = result else {
+            panic!("expected batch result from batch serdes");
+        };
 
         assert_eq!(
             result.completion_reason,
@@ -428,10 +489,9 @@ mod tests {
         });
 
         let execution_ctx = make_execution_context(arn, vec![map_op]).await;
-        let result = maybe_replay_map::<u32, u32>(
+        let err = evaluate_map_replay::<u32, u32>(
             Some("map"),
             &[1u32],
-            &None,
             &None,
             &None,
             &execution_ctx,
@@ -439,13 +499,10 @@ mod tests {
             &CompletionConfig::new(),
         )
         .await
-        .unwrap()
-        .expect("batch result");
+        .expect_err("expected replay validation failure");
 
-        assert!(result.all.is_empty());
-        assert_eq!(
-            result.completion_reason,
-            BatchCompletionReason::AllCompleted
-        );
+        let DurableError::ReplayValidationFailed { .. } = err else {
+            panic!("expected ReplayValidationFailed, got {err:?}");
+        };
     }
 }

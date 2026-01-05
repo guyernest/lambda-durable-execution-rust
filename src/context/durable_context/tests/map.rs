@@ -416,13 +416,7 @@ async fn test_map_replay_children_reconstructs_without_running_mapper() {
         "ContextDetails": { "Result": item_1_result },
     });
 
-    let lambda_service = Arc::new(MockLambdaService::new());
-    for _ in 0..3 {
-        lambda_service.expect_checkpoint(MockCheckpointConfig::default());
-    }
-    let ctx =
-        make_replay_context_with_service(arn, vec![map_op, item_0_op, item_1_op], lambda_service)
-            .await;
+    let ctx = make_replay_context(arn, vec![map_op, item_0_op, item_1_op]).await;
 
     let batch: BatchResult<u32> = ctx
         .map(
@@ -445,6 +439,68 @@ async fn test_map_replay_children_reconstructs_without_running_mapper() {
         .map(|item| item.result.expect("result"))
         .collect();
     assert_eq!(results, vec![2, 3]);
+}
+
+#[tokio::test]
+async fn test_map_replay_children_reconstructs_child_replay_children_by_running_mapper() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let arn = "arn:test:durable";
+    let step_id = "map_0".to_string();
+    let map_hashed_id = CheckpointManager::hash_id(&step_id);
+
+    let summary = json!({
+        "type": "MapResult",
+        "totalCount": 1,
+        "successCount": 1,
+        "failureCount": 0,
+        "completionReason": "ALL_COMPLETED",
+        "status": "SUCCEEDED",
+    })
+    .to_string();
+    let map_op = json!({
+        "Id": map_hashed_id.clone(),
+        "Type": "CONTEXT",
+        "SubType": "Map",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": summary, "ReplayChildren": true },
+    });
+
+    let item_0_name = "map-item-0".to_string();
+    let item_0_step_id = format!("{item_0_name}_{}", 1);
+    let item_0_hashed_id = CheckpointManager::hash_id(&item_0_step_id);
+    let item_0_op = json!({
+        "Id": item_0_hashed_id,
+        "ParentId": map_hashed_id,
+        "Type": "CONTEXT",
+        "SubType": "MapIteration",
+        "Status": "SUCCEEDED",
+        "ContextDetails": { "Result": "", "ReplayChildren": true },
+    });
+
+    let ctx = make_replay_context(arn, vec![map_op, item_0_op]).await;
+    let called = Arc::new(AtomicUsize::new(0));
+
+    let called_clone = Arc::clone(&called);
+    let batch: BatchResult<u32> = ctx
+        .map(
+            Some("map"),
+            vec![41u32],
+            move |item, _child_ctx, _idx| {
+                let called = Arc::clone(&called_clone);
+                async move {
+                    called.fetch_add(1, Ordering::SeqCst);
+                    Ok::<u32, DurableError>(item + 1)
+                }
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(called.load(Ordering::SeqCst), 1);
+    assert_eq!(batch.success_count(), 1);
+    assert_eq!(batch.succeeded()[0].result, Some(42));
 }
 
 #[tokio::test]
