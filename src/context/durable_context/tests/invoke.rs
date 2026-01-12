@@ -127,7 +127,10 @@ async fn test_invoke_replay_pending_suspends() {
         "Status": "STARTED",
     });
 
-    let ctx = make_replay_context(arn, vec![op]).await;
+    let lambda_service = Arc::new(MockLambdaService::new());
+    // Invoke replay forces a checkpoint refresh before suspending.
+    lambda_service.expect_checkpoint(MockCheckpointConfig::default());
+    let ctx = make_replay_context_with_service(arn, vec![op], lambda_service).await;
     let result = tokio::time::timeout(
         StdDuration::from_millis(50),
         ctx.invoke::<serde_json::Value, serde_json::Value>(
