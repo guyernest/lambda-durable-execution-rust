@@ -175,7 +175,7 @@ where
         let child_hashed_id = DurableContextImpl::hash_id(&child_step_id);
         let Some(child_op) = inner.execution_ctx.get_step_data(&child_hashed_id).await else {
             return Err(DurableError::ReplayValidationFailed {
-                expected: format!("map child context present for index {}", index),
+                expected: format!("map child context present for index {index}"),
                 actual: "missing".to_string(),
             });
         };
