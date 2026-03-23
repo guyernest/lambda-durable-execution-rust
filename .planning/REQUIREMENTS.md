@@ -26,12 +26,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### MCP Integration
 
-- [ ] **MCP-01**: Agent connects to configured MCP servers via pmcp HttpTransport and initializes each connection
-- [ ] **MCP-02**: Agent discovers tools from each MCP server via `list_tools()` and merges into a unified tool list
-- [ ] **MCP-03**: MCP tool schemas translated to Claude API tool format (name, description, input_schema)
+- [x] **MCP-01**: Agent connects to configured MCP servers via pmcp HttpTransport and initializes each connection
+- [x] **MCP-02**: Agent discovers tools from each MCP server via `list_tools()` and merges into a unified tool list
+- [x] **MCP-03**: MCP tool schemas translated to Claude API tool format (name, description, input_schema)
 - [ ] **MCP-04**: Agent executes tool calls via MCP `call_tool()` with tool results mapped to Anthropic tool_result content blocks
 - [ ] **MCP-05**: MCP tool errors (isError: true) passed to LLM as error tool_results -- agent does not fail, LLM decides recovery
-- [ ] **MCP-06**: MCP connection failure at startup fails fast with clear error (no calling LLM with zero tools)
+- [x] **MCP-06**: MCP connection failure at startup fails fast with clear error (no calling LLM with zero tools)
 
 ### Agent Loop
 
@@ -108,12 +108,12 @@ Deferred to future release. Tracked but not in current roadmap.
 | CONF-02 | Phase 2 | Complete |
 | CONF-03 | Phase 2 | Complete |
 | CONF-04 | Phase 2 | Complete |
-| MCP-01 | Phase 2 | Pending |
-| MCP-02 | Phase 2 | Pending |
-| MCP-03 | Phase 2 | Pending |
+| MCP-01 | Phase 2 | Complete |
+| MCP-02 | Phase 2 | Complete |
+| MCP-03 | Phase 2 | Complete |
 | MCP-04 | Phase 3 | Pending |
 | MCP-05 | Phase 3 | Pending |
-| MCP-06 | Phase 2 | Pending |
+| MCP-06 | Phase 2 | Complete |
 | LOOP-01 | Phase 3 | Pending |
 | LOOP-02 | Phase 3 | Pending |
 | LOOP-03 | Phase 3 | Pending |

@@ -51,7 +51,7 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md — AgentConfig types, DynamoDB loader, provider mapping, ConfigError (config/ module)
-- [ ] 02-02-PLAN.md — MCP client integration with tool discovery, schema translation, prefix routing (mcp/ module)
+- [x] 02-02-PLAN.md — MCP client integration with tool discovery, schema translation, prefix routing (mcp/ module)
 
 ### Phase 3: Agent Loop
 **Goal**: Agent executes the complete durable loop -- LLM call, tool execution, result assembly, repeat -- until the LLM returns a final response
