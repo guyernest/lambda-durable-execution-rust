@@ -3,6 +3,8 @@
 mod config;
 #[allow(dead_code)]
 mod llm;
+#[allow(dead_code)]
+mod mcp;
 
 #[tokio::main]
 async fn main() -> Result<(), lambda_runtime::Error> {

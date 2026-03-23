@@ -24,6 +24,8 @@ aws-config = { version = "1.8", features = ["behavior-version-latest"] }
 aws-sdk-dynamodb = "1.98"
 aws-sdk-secretsmanager = "1.98"
 thiserror = "2.0"
+pmcp = { path = "../../sdk/rust-mcp-sdk", features = ["streamable-http"] }
+url = "2.5"
 
 [dev-dependencies]
 mockito = "1.7"
