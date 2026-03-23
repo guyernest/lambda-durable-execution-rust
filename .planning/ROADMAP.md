@@ -50,7 +50,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — AgentConfig types, DynamoDB loader, provider mapping, ConfigError (config/ module)
+- [x] 02-01-PLAN.md — AgentConfig types, DynamoDB loader, provider mapping, ConfigError (config/ module)
 - [ ] 02-02-PLAN.md — MCP client integration with tool discovery, schema translation, prefix routing (mcp/ module)
 
 ### Phase 3: Agent Loop

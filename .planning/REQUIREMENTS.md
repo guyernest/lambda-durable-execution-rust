@@ -19,10 +19,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Configuration
 
-- [ ] **CONF-01**: Agent reads configuration from AgentRegistry DynamoDB table by agent_name and version
-- [ ] **CONF-02**: Configuration includes system_prompt, llm_model, temperature, max_tokens, max_iterations
-- [ ] **CONF-03**: Configuration includes mcp_servers array with endpoint URLs (additive field to existing schema)
-- [ ] **CONF-04**: Config loading is a durable `ctx.step()` -- cached on replay
+- [x] **CONF-01**: Agent reads configuration from AgentRegistry DynamoDB table by agent_name and version
+- [x] **CONF-02**: Configuration includes system_prompt, llm_model, temperature, max_tokens, max_iterations
+- [x] **CONF-03**: Configuration includes mcp_servers array with endpoint URLs (additive field to existing schema)
+- [x] **CONF-04**: Config loading is a durable `ctx.step()` -- cached on replay
 
 ### MCP Integration
 
@@ -104,10 +104,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | LLM-05 | Phase 1 | Complete |
 | LLM-06 | Phase 1 | Complete |
 | LLM-07 | Phase 1 | Complete |
-| CONF-01 | Phase 2 | Pending |
-| CONF-02 | Phase 2 | Pending |
-| CONF-03 | Phase 2 | Pending |
-| CONF-04 | Phase 2 | Pending |
+| CONF-01 | Phase 2 | Complete |
+| CONF-02 | Phase 2 | Complete |
+| CONF-03 | Phase 2 | Complete |
+| CONF-04 | Phase 2 | Complete |
 | MCP-01 | Phase 2 | Pending |
 | MCP-02 | Phase 2 | Pending |
 | MCP-03 | Phase 2 | Pending |
