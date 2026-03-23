@@ -9,12 +9,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### LLM Client (adapted from call_llm_rust)
 
-- [ ] **LLM-01**: UnifiedLLMService extracted/adapted from existing call_llm_rust with provider-agnostic request/response types (LLMInvocation, LLMResponse, function_calls, metadata)
+- [x] **LLM-01**: UnifiedLLMService extracted/adapted from existing call_llm_rust with provider-agnostic request/response types (LLMInvocation, LLMResponse, function_calls, metadata)
 - [ ] **LLM-02**: Anthropic transformer (AnthropicTransformer) for Claude models -- request/response mapping including tool_use/tool_result content blocks
 - [ ] **LLM-03**: OpenAI transformer (OpenAITransformer) for GPT models -- request/response mapping including function calling format
-- [ ] **LLM-04**: Provider config from AgentRegistry (provider_id, model_id, endpoint, auth config) matching existing call_llm_rust ProviderConfig schema
+- [x] **LLM-04**: Provider config from AgentRegistry (provider_id, model_id, endpoint, auth config) matching existing call_llm_rust ProviderConfig schema
 - [ ] **LLM-05**: API key retrieval from AWS Secrets Manager using secret_path and secret_key_name from provider config
-- [ ] **LLM-06**: LLM error classification -- retryable (429, 529, 503) vs non-retryable (400, 401) mapped to durable step retry patterns
+- [x] **LLM-06**: LLM error classification -- retryable (429, 529, 503) vs non-retryable (400, 401) mapped to durable step retry patterns
 - [ ] **LLM-07**: Unified function_calls extraction from LLM response regardless of provider (tool_use blocks for Anthropic, tool_calls for OpenAI)
 
 ### Configuration
@@ -97,12 +97,12 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LLM-01 | Phase 1 | Pending |
+| LLM-01 | Phase 1 | Complete |
 | LLM-02 | Phase 1 | Pending |
 | LLM-03 | Phase 1 | Pending |
-| LLM-04 | Phase 1 | Pending |
+| LLM-04 | Phase 1 | Complete |
 | LLM-05 | Phase 1 | Pending |
-| LLM-06 | Phase 1 | Pending |
+| LLM-06 | Phase 1 | Complete |
 | LLM-07 | Phase 1 | Pending |
 | CONF-01 | Phase 2 | Pending |
 | CONF-02 | Phase 2 | Pending |
