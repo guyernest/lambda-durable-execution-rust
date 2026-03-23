@@ -47,11 +47,11 @@ Plans:
   3. Agent connects to each configured MCP server via pmcp HttpTransport and calls `list_tools()` to discover available tools
   4. Discovered MCP tool schemas are translated into Claude API tool format (name, description, input_schema) ready for LLM calls
   5. If any MCP server fails to connect at startup, the agent fails fast with a clear error before calling the LLM
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — AgentConfig types, DynamoDB loader, provider mapping, ConfigError (config/ module)
+- [ ] 02-02-PLAN.md — MCP client integration with tool discovery, schema translation, prefix routing (mcp/ module)
 
 ### Phase 3: Agent Loop
 **Goal**: Agent executes the complete durable loop -- LLM call, tool execution, result assembly, repeat -- until the LLM returns a final response
@@ -102,8 +102,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. LLM Client | 0/3 | Planning complete | - |
-| 2. Configuration and MCP Integration | 0/0 | Not started | - |
+| 1. LLM Client | 3/3 | Complete | 2026-03-23 |
+| 2. Configuration and MCP Integration | 0/2 | Planning complete | - |
 | 3. Agent Loop | 0/0 | Not started | - |
 | 4. Observability | 0/0 | Not started | - |
 | 5. Deployment and Validation | 0/0 | Not started | - |
