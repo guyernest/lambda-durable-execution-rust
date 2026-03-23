@@ -13,6 +13,7 @@ A single Durable Lambda replaces the entire Step Functions orchestration — the
 ### Validated
 
 - ✓ Multi-provider LLM client with typed request/response, error classification, and Secrets Manager auth — Phase 1
+- ✓ AgentRegistry config loading from DynamoDB with provider mapping and MCP server tool discovery with prefix routing — Phase 2
 
 ### Active
 
@@ -92,4 +93,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-23 after Phase 1 completion*
+*Last updated: 2026-03-23 after Phase 2 completion*
