@@ -111,10 +111,7 @@ impl OpenAITransformer {
     /// format (Anthropic-style) has tool results as content blocks within user
     /// messages, but OpenAI expects them as separate "tool" role messages with
     /// the preceding assistant message carrying `tool_calls`.
-    fn transform_messages(
-        &self,
-        messages: &[UnifiedMessage],
-    ) -> Result<Vec<Value>, LlmError> {
+    fn transform_messages(&self, messages: &[UnifiedMessage]) -> Result<Vec<Value>, LlmError> {
         let mut openai_messages: Vec<Value> = Vec::new();
         let mut i = 0;
         let mut processed_assistant_indices = HashSet::new();
@@ -165,10 +162,8 @@ impl OpenAITransformer {
 
                                     // Add tool_calls if not present
                                     if assistant_msg.get("tool_calls").is_none() {
-                                        let tool_calls = self.reconstruct_tool_calls(
-                                            &messages[j],
-                                            &tool_results,
-                                        )?;
+                                        let tool_calls = self
+                                            .reconstruct_tool_calls(&messages[j], &tool_results)?;
                                         assistant_msg["tool_calls"] = json!(tool_calls);
                                     }
 
@@ -207,10 +202,7 @@ impl OpenAITransformer {
         Ok(openai_messages)
     }
 
-    fn transform_single_message(
-        &self,
-        message: &UnifiedMessage,
-    ) -> Result<Value, LlmError> {
+    fn transform_single_message(&self, message: &UnifiedMessage) -> Result<Value, LlmError> {
         let mut msg = json!({
             "role": message.role,
         });
@@ -312,10 +304,7 @@ impl OpenAITransformer {
             .collect())
     }
 
-    fn transform_response_content(
-        &self,
-        message: &Value,
-    ) -> Result<Vec<ContentBlock>, LlmError> {
+    fn transform_response_content(&self, message: &Value) -> Result<Vec<ContentBlock>, LlmError> {
         let mut blocks = Vec::new();
 
         // Extract text content
@@ -368,10 +357,8 @@ impl OpenAITransformer {
     fn extract_usage(&self, response: &Value) -> Option<TokenUsage> {
         let usage = response.get("usage")?;
 
-        let input_tokens =
-            utils::extract_u32(usage, &["prompt_tokens", "input_tokens"], 0);
-        let output_tokens =
-            utils::extract_u32(usage, &["completion_tokens", "output_tokens"], 0);
+        let input_tokens = utils::extract_u32(usage, &["prompt_tokens", "input_tokens"], 0);
+        let output_tokens = utils::extract_u32(usage, &["completion_tokens", "output_tokens"], 0);
 
         Some(TokenUsage {
             input_tokens,
@@ -383,8 +370,8 @@ impl OpenAITransformer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::models::{ProviderConfig, UnifiedTool};
+    use super::*;
 
     fn make_provider_config() -> ProviderConfig {
         ProviderConfig {
@@ -460,7 +447,10 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "get_weather");
-        assert_eq!(tools[0]["function"]["description"], "Get weather for a city");
+        assert_eq!(
+            tools[0]["function"]["description"],
+            "Get weather for a city"
+        );
         assert!(tools[0]["function"]["parameters"].is_object());
     }
 

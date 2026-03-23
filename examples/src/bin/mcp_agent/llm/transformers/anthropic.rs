@@ -1,10 +1,10 @@
-use super::utils;
-use super::MessageTransformer;
 use super::super::error::LlmError;
 use super::super::models::{
     AssistantMessage, ContentBlock, FunctionCall, LLMInvocation, MessageContent, TokenUsage,
     TransformedRequest, TransformedResponse, UnifiedMessage,
 };
+use super::utils;
+use super::MessageTransformer;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::{debug, warn};
@@ -200,10 +200,7 @@ impl AnthropicTransformer {
         None
     }
 
-    fn transform_messages(
-        &self,
-        messages: &[UnifiedMessage],
-    ) -> Result<Vec<Value>, LlmError> {
+    fn transform_messages(&self, messages: &[UnifiedMessage]) -> Result<Vec<Value>, LlmError> {
         let mut anthropic_messages = Vec::new();
 
         for message in messages {
@@ -234,10 +231,7 @@ impl AnthropicTransformer {
         Ok(anthropic_messages)
     }
 
-    fn transform_content_blocks(
-        &self,
-        blocks: &[ContentBlock],
-    ) -> Result<Vec<Value>, LlmError> {
+    fn transform_content_blocks(&self, blocks: &[ContentBlock]) -> Result<Vec<Value>, LlmError> {
         let mut anthropic_blocks = Vec::new();
 
         for block in blocks {
@@ -310,8 +304,8 @@ impl AnthropicTransformer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::models::{ProviderConfig, UnifiedTool};
+    use super::*;
 
     fn make_provider_config() -> ProviderConfig {
         ProviderConfig {

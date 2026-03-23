@@ -16,10 +16,8 @@ pub use openai::OpenAITransformer;
 /// Methods are synchronous because they perform only JSON transformation, no I/O.
 pub trait MessageTransformer: Send + Sync {
     /// Transform a unified LLM invocation to a provider-specific request body and headers.
-    fn transform_request(
-        &self,
-        invocation: &LLMInvocation,
-    ) -> Result<TransformedRequest, LlmError>;
+    fn transform_request(&self, invocation: &LLMInvocation)
+        -> Result<TransformedRequest, LlmError>;
 
     /// Transform a provider-specific JSON response to the unified response format.
     fn transform_response(&self, response: Value) -> Result<TransformedResponse, LlmError>;
@@ -48,16 +46,10 @@ impl TransformerRegistry {
         let mut transformers: HashMap<String, Box<dyn MessageTransformer>> = HashMap::new();
 
         // Register Anthropic transformer
-        transformers.insert(
-            "anthropic_v1".to_string(),
-            Box::new(AnthropicTransformer),
-        );
+        transformers.insert("anthropic_v1".to_string(), Box::new(AnthropicTransformer));
 
         // Register OpenAI transformer (also used for XAI, DeepSeek)
-        transformers.insert(
-            "openai_v1".to_string(),
-            Box::new(OpenAITransformer),
-        );
+        transformers.insert("openai_v1".to_string(), Box::new(OpenAITransformer));
 
         Self { transformers }
     }
