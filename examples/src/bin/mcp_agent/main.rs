@@ -1,5 +1,7 @@
 // Allow dead code until the handler is wired in Phase 3.
 #[allow(dead_code)]
+mod config;
+#[allow(dead_code)]
 mod llm;
 
 #[tokio::main]

@@ -21,6 +21,7 @@ lambda_runtime = "1.0.1"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 aws-config = { version = "1.8", features = ["behavior-version-latest"] }
+aws-sdk-dynamodb = "1.98"
 aws-sdk-secretsmanager = "1.98"
 thiserror = "2.0"
 
