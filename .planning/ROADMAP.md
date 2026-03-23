@@ -30,11 +30,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. HTTP 429/529/503 errors from either provider are classified as retryable; 400/401 errors are classified as non-retryable
   4. API keys are retrieved from AWS Secrets Manager using provider config's secret_path and secret_key_name
   5. Function calls (tool_use for Anthropic, tool_calls for OpenAI) are extracted from the unified response type regardless of which provider produced them
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md — Foundation types, error classification, and project scaffold (models.rs, error.rs, utils.rs, Cargo.toml)
+- [ ] 01-02-PLAN.md — Anthropic and OpenAI transformers with MessageTransformer trait and TransformerRegistry
+- [ ] 01-03-PLAN.md — SecretManager and UnifiedLLMService with complete LLM invocation pipeline
 
 ### Phase 2: Configuration and MCP Integration
 **Goal**: Agent can load its configuration from DynamoDB and connect to MCP servers to discover and translate tool schemas
@@ -101,7 +102,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. LLM Client | 0/0 | Not started | - |
+| 1. LLM Client | 0/3 | Planning complete | - |
 | 2. Configuration and MCP Integration | 0/0 | Not started | - |
 | 3. Agent Loop | 0/0 | Not started | - |
 | 4. Observability | 0/0 | Not started | - |
