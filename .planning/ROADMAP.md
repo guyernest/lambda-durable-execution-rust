@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md — Foundation types, error classification, and project scaffold (models.rs, error.rs, utils.rs, Cargo.toml)
-- [ ] 01-02-PLAN.md — Anthropic and OpenAI transformers with MessageTransformer trait and TransformerRegistry
+- [x] 01-02-PLAN.md — Anthropic and OpenAI transformers with MessageTransformer trait and TransformerRegistry
 - [ ] 01-03-PLAN.md — SecretManager and UnifiedLLMService with complete LLM invocation pipeline
 
 ### Phase 2: Configuration and MCP Integration
