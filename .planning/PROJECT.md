@@ -31,7 +31,7 @@ A single Durable Lambda replaces the entire Step Functions orchestration — the
 
 ### Out of Scope
 
-- Multi-provider LLM support beyond Anthropic — the existing Rust LLM caller supports OpenAI/Gemini/Bedrock, but the PoC targets Claude only. Provider abstraction can be added later.
+- Gemini and Bedrock/Nova transformers — the PoC includes Anthropic and OpenAI via the existing call_llm_rust code. Additional providers can be added later by porting the remaining transformers.
 - Admin UI modifications — the AgentRegistry schema extension for MCP server endpoints is the interface; UI changes are a separate effort in the step-functions-agent repo.
 - MCP server creation/wrapping — existing tools will be wrapped as MCP servers separately. This project builds the client/agent side.
 - Streaming LLM responses — batch completion first, streaming can be added later.
@@ -70,9 +70,8 @@ AWS Durable Execution does not yet support the `provided.al2023` runtime. The La
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Standardize on MCP for all tool interactions | Eliminates DynamoDB Tool Registry, simplifies discovery, enables any MCP-compatible tool server | -- Pending |
-| Start with Anthropic Claude only | Simplifies PoC; multi-provider already proven in existing LLM caller | -- Pending |
+| Extract UnifiedLLMService from call_llm_rust | Reuse proven multi-provider abstraction (Anthropic + OpenAI for PoC) instead of rebuilding | -- Pending |
 | Build as example binary in this repo | Keeps PoC close to the SDK it depends on; can extract to separate crate later | -- Pending |
-| Reuse Anthropic transformer from call_llm_rust | Avoid reimplementing provider-specific request/response mapping | -- Pending |
 | Extend AgentRegistry with mcp_servers field | Additive change to existing schema; existing Step Functions agents unaffected | -- Pending |
 
 ## Evolution
