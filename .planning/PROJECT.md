@@ -1,12 +1,24 @@
-# Durable Lambda MCP Agent
+# Durable Lambda MCP Agent Platform
 
 ## What This Is
 
-A Rust-based Durable Lambda agent that replaces the existing Step Functions agent pattern. The agent acts as an MCP client, connecting to MCP servers for tool discovery and execution, while using the existing Rust LLM caller for multi-provider LLM support. Managed via the existing AgentRegistry and admin UI alongside Step Functions agents.
+A unified platform for AI agents and MCP servers, built on Durable Lambda execution. Extends pmcp.run from an MCP server hosting service into a full agent platform — agents are config-driven Durable Lambdas that discover and use MCP tools, communicate via multi-channel side-channels (Slack, Discord, local agents), and can orchestrate as teams. Replaces Step Functions orchestration entirely.
 
 ## Core Value
 
-A single Durable Lambda replaces the entire Step Functions orchestration — the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions, no state machine definition required.
+A single Durable Lambda replaces the entire Step Functions orchestration — the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions, extended with channels for human/agent interaction and team coordination, all managed through pmcp.run.
+
+## Current Milestone: v2.0 Integration Plan
+
+**Goal:** Extend pmcp.run into a unified platform for MCP servers AND AI agents, replacing Step Functions with Durable Lambda, adding multi-channel communication, and enabling agent teams.
+
+**Target features:**
+- Single config-driven Durable Agent Lambda deployable via pmcp-run
+- Channels abstraction (Slack, Discord, WhatsApp, local agent) for approval, interaction, and inter-agent communication
+- PMCP SDK reference example showcasing MCP Tasks and client patterns
+- Agent Teams with dynamic MCP server generation exposing agents as tools
+- pmcp-run Agents tab for agent config, execution, scheduling, and history
+- Migration of Step Functions Agent management features into pmcp-run
 
 ## Requirements
 
@@ -20,63 +32,64 @@ A single Durable Lambda replaces the entire Step Functions orchestration — the
 
 ### Active
 
-- [ ] Agent reads configuration from AgentRegistry DynamoDB table (instructions, LLM provider/model, MCP server endpoints, parameters)
-- [ ] Agent connects to configured MCP servers via HTTP transport and discovers tools via `list_tools()`
-- [ ] Agent calls LLM (Anthropic Claude) with message history and discovered MCP tool schemas
-- [ ] Agent executes tool calls returned by LLM via MCP `call_tool()`, with parallel execution via `ctx.map()`
-- [ ] Agent loop continues (LLM call → tool execution → append results → LLM call) until LLM returns final response
-- [ ] Each LLM call and tool call is a durable `step()` operation — replayed from cache on Lambda resume
-- [ ] Agent handles the Anthropic message format (assistant content blocks with tool_use, user content blocks with tool_result)
-- [ ] Agent configuration includes list of MCP server endpoints replacing the DynamoDB Tool Registry
-- [ ] Agent supports configurable retry for transient LLM and MCP failures
-- [ ] Agent returns final LLM response as the durable execution result
-- [ ] Agent is deployable via SAM template with DurableConfig, matching existing example patterns
-- [ ] MCP tool schemas are translated to Claude API tool format for LLM calls
+- [ ] Single generic Durable Agent Lambda reading all configuration from registry
+- [ ] Channels abstraction generalizing wait_for_callback into named communication channels
+- [ ] Agent Teams with dynamic MCP server generation and orchestrated execution
+- [ ] pmcp-run Agents tab for agent lifecycle management
+- [ ] PMCP SDK reference example for MCP client patterns
+- [ ] Migration of Step Functions Agent management capabilities
 
 ### Out of Scope
 
-- Gemini and Bedrock/Nova transformers — the PoC includes Anthropic and OpenAI via the existing call_llm_rust code. Additional providers can be added later by porting the remaining transformers.
-- Admin UI modifications — the AgentRegistry schema extension for MCP server endpoints is the interface; UI changes are a separate effort in the step-functions-agent repo.
-- MCP server creation/wrapping — existing tools will be wrapped as MCP servers separately. This project builds the client/agent side.
-- Streaming LLM responses — batch completion first, streaming can be added later.
-- Human-in-the-loop via `wait_for_callback()` — valuable but not needed for the PoC agent loop.
+- Gemini and Bedrock/Nova transformers — Anthropic and OpenAI sufficient for platform integration
+- Building new MCP servers — this milestone integrates existing pmcp-run hosted servers
+- Replacing pmcp-run's existing MCP hosting features — additive only
+- Mobile clients — web-first via pmcp-run LCARS UI
 
 ## Context
 
-### Existing Assets
+### Existing Assets (v1.0 Delivered)
 
-- **Durable Execution SDK** (this repo): Provides `step()`, `map()`, `parallel()`, `wait()`, `wait_for_callback()` with checkpointing and replay. 332 tests, production-quality architecture.
-- **Rust LLM Caller** (`~/projects/step-functions-agent/lambda/call_llm_rust`): UnifiedLLMService with provider transformers (Anthropic, OpenAI, Gemini, Bedrock), Secrets Manager integration, OpenTelemetry metrics. The Anthropic transformer and message models can be extracted/reused.
-- **Rust MCP SDK** (`~/Development/mcp/sdk/rust-mcp-sdk`): `pmcp` v2.0.0 crate with full MCP client support — `Client`, `HttpTransport`, `list_tools()`, `call_tool()`, middleware (auth, retry, logging). HTTP/SSE transport suitable for Lambda-to-Lambda MCP communication.
-- **AgentRegistry** (`~/projects/step-functions-agent/`): DynamoDB table with agent_name/version keys, system_prompt, llm_provider, llm_model, tools list, parameters (temperature, max_tokens, max_iterations). CDK-managed with GSIs.
-- **Admin UI** (`~/projects/step-functions-agent/ui_amplify/`): Amplify-hosted management interface for viewing/editing agent configurations.
+- **Durable Execution SDK** (this repo): `step()`, `map()`, `parallel()`, `wait()`, `wait_for_callback()` with checkpointing and replay. 332 tests, production-quality.
+- **Durable MCP Agent** (this repo, `examples/src/bin/mcp_agent/`): Working agent binary with LLM client, MCP integration, agent loop, observability, SAM deployment. All 30 v1 requirements complete.
+
+### Integration Targets
+
+- **Step Functions Agent** (`~/projects/step-functions-agent/`): Rich Amplify Gen 2 management UI (12+ pages), AgentRegistry, ToolRegistry, MCPServerRegistry, LLM Models Registry, execution history, metrics, cost tracking, approval dashboard. CDK Python deployment.
+- **pmcp-run** (`~/Development/mcp/sdk/pmcp-run/`): MCP server hosting platform with Next.js LCARS UI, Amplify Gen 2 backend, multi-tenant SaaS, deployment pipeline (OpenAPI/GraphQL/SQL schema-to-server), registry, monitoring.
+- **PMCP SDK** (`~/Development/mcp/sdk/rust-mcp-sdk/`): Rust MCP SDK (`pmcp` crate) used to build MCP servers deployed to pmcp-run. Client and server support, HTTP/SSE transport.
+- **ZeroClaw** (`~/projects/LocalAgent/zeroclaw/`): Rust agent runtime with 12+ channel transports (Telegram, Discord, Slack, WhatsApp, Activity, webhook, CLI), trait-driven channel abstraction, deny-by-default security, supervised listeners with auto-restart. Reference architecture for the channels system.
 
 ### Architecture Decision
 
-The Step Functions agent routes tool calls through the state machine — each tool is a separate Lambda invoked by a Map state, with results flowing back through JSONata transformations. Adding MCP support to this architecture requires teaching Step Functions to speak MCP protocol, which is awkward because MCP is a stateful client-server protocol (connect → initialize → discover → call) that doesn't map well to stateless Step Functions task invocations.
-
-The Durable Lambda approach makes MCP native: the agent IS an MCP client. Connection, discovery, and tool calls are all in-process. The durable execution framework handles the long-running nature (LLM calls, multiple tool iterations) via checkpointing.
+The Durable Lambda agent replaces Step Functions entirely. The agent loop is Rust code — no state machine definition, no JSONata, no explicit tool routing. MCP is native (the agent IS an MCP client). Channels generalize `wait_for_callback()` for human approval, local agent tasks, and inter-agent communication. Agent Teams use dynamic MCP servers where each agent is exposed as a tool.
 
 ### Runtime Constraint
 
-AWS Durable Execution does not yet support the `provided.al2023` runtime. The Lambda must be configured with `nodejs24.x` runtime and `AWS_LAMBDA_EXEC_WRAPPER=/var/task/bootstrap` to run the Rust binary. This is the same pattern used by all examples in this repo and is a documented Lambda feature.
+AWS Durable Execution requires `nodejs24.x` runtime with `AWS_LAMBDA_EXEC_WRAPPER=/var/task/bootstrap` for Rust binaries.
 
 ## Constraints
 
-- **Tech stack**: Rust (edition 2021, MSRV 1.88), AWS Lambda with Durable Execution, SAM for deployment
-- **Dependencies**: Must use `lambda-durable-execution-rust` (this crate), `pmcp` (MCP SDK), and reuse Anthropic-specific code from the existing Rust LLM caller
-- **MCP transport**: HTTP/SSE for Lambda-to-MCP-server communication (stdio not viable in Lambda)
-- **AgentRegistry compatibility**: Must read from the existing DynamoDB table schema; new fields (MCP server endpoints) should be additive, not breaking
-- **Checkpoint limits**: 750KB per checkpoint batch — message histories for long conversations must stay within bounds or be managed
+- **Tech stack**: Rust (edition 2021, MSRV 1.88), AWS Lambda with Durable Execution
+- **Dependencies**: `lambda-durable-execution-rust` (this crate), `pmcp` (MCP SDK)
+- **MCP transport**: HTTP/SSE (stdio not viable in Lambda)
+- **Checkpoint limits**: 750KB per checkpoint batch
+- **pmcp-run compatibility**: Additive features to existing platform, no breaking changes
+- **Cross-team delivery**: Each phase should be independently assignable to different teams
+- **Channel security**: Deny-by-default model (following zeroclaw patterns)
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Standardize on MCP for all tool interactions | Eliminates DynamoDB Tool Registry, simplifies discovery, enables any MCP-compatible tool server | -- Pending |
-| Extract UnifiedLLMService from call_llm_rust | Reuse proven multi-provider abstraction (Anthropic + OpenAI for PoC) instead of rebuilding | -- Pending |
-| Build as example binary in this repo | Keeps PoC close to the SDK it depends on; can extract to separate crate later | -- Pending |
-| Extend AgentRegistry with mcp_servers field | Additive change to existing schema; existing Step Functions agents unaffected | -- Pending |
+| Standardize on MCP for all tool interactions | Eliminates DynamoDB Tool Registry, simplifies discovery | ✓ Good (v1.0) |
+| Extract UnifiedLLMService from call_llm_rust | Reuse proven multi-provider abstraction | ✓ Good (v1.0) |
+| Build agent as example binary in this repo | Keeps PoC close to SDK; extract to separate crate later | ✓ Good (v1.0) |
+| Extend AgentRegistry with mcp_servers field | Additive change, existing agents unaffected | ✓ Good (v1.0) |
+| Single generic agent binary, not per-agent | Config-driven from registry; custom loops are rare exception | — Pending |
+| pmcp-run as unified platform | Already has hosting pipeline, registry, multi-tenant UI, deployment | — Pending |
+| Channels model from zeroclaw | Proven trait abstraction with 12+ transports, security model | — Pending |
+| Agent Teams via dynamic MCP server | Agents as tools, orchestrator pattern, maps to ctx.parallel/map | — Pending |
 
 ## Evolution
 
@@ -96,4 +109,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-24 after Phase 5 completion (all phases complete)*
+*Last updated: 2026-03-24 after milestone v2.0 start*
