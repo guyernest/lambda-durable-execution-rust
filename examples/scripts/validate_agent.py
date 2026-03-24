@@ -284,6 +284,7 @@ def cleanup_agent_config(
 
 def run_validation(
     region: str,
+    profile: str | None,
     stack: str,
     mcp_server_url: str,
     agent_name: str,
@@ -298,7 +299,7 @@ def run_validation(
     # Initialize AWS clients
     click.echo()
     click.echo(styled("  Initializing...", dim=True))
-    session = boto3.Session(region_name=region)
+    session = boto3.Session(region_name=region, profile_name=profile)
     cfn_client = session.client("cloudformation")
     lambda_client = session.client("lambda")
     dynamodb_client = session.client("dynamodb")
@@ -470,6 +471,7 @@ def run_validation(
 
 @click.command()
 @click.option("--region", default="us-east-1", help="AWS region")
+@click.option("--profile", default=None, help="AWS CLI profile name")
 @click.option("--stack", default="durable-rust", help="CloudFormation stack name")
 @click.option(
     "--mcp-server-url",
@@ -497,6 +499,7 @@ def run_validation(
 )
 def main(
     region: str,
+    profile: str | None,
     stack: str,
     mcp_server_url: str,
     agent_name: str,
@@ -513,6 +516,7 @@ def main(
     """
     exit_code = run_validation(
         region=region,
+        profile=profile,
         stack=stack,
         mcp_server_url=mcp_server_url,
         agent_name=agent_name,
