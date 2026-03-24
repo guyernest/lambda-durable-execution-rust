@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Durable MCP Agent - Durable Lambda replacing Step Functions agent pattern
+
+# NOTE: AWS SAM rust-cargolambda support is a preview feature.
+# Enable with `SAM_CLI_BETA_RUST_CARGO_LAMBDA=1` or `sam build --beta-features`.
+
+Parameters:
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues:
+      - arm64
+      - x86_64
+  RustLog:
+    Type: String
+    Default: info
+  AgentRegistryTableName:
+    Type: String
+    Default: AgentRegistry
+
+Globals:
+  Function:
+    # NOTE: Durable Config currently requires a managed runtime; we use `nodejs24.x`
+    # with `AWS_LAMBDA_EXEC_WRAPPER=/var/task/bootstrap` to run the Rust bootstrap.
+    Runtime: nodejs24.x
+    Handler: bootstrap
+    Architectures:
+      - !Ref Architecture
+    Environment:
+      Variables:
+        RUST_LOG: !Ref RustLog
+        AWS_LAMBDA_EXEC_WRAPPER: /var/task/bootstrap
+
+Resources:
+  AgentRegistryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref AgentRegistryTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: agent_name
+          AttributeType: S
+        - AttributeName: version
+          AttributeType: S
+      KeySchema:
+        - AttributeName: agent_name
+          KeyType: HASH
+        - AttributeName: version
+          KeyType: RANGE
+
+  McpAgentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: mcp_agent
+    Properties:
+      CodeUri: .
+      Timeout: 900
+      MemorySize: 256
+      DurableConfig:
+        ExecutionTimeout: 3600
+        RetentionPeriodInDays: 7
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt AgentRegistryTable.Arn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: "*"
+      Environment:
+        Variables:
+          AGENT_REGISTRY_TABLE: !Ref AgentRegistryTable
+
+Outputs:
+  McpAgentFunctionArn:
+    Description: MCP Agent function ARN
+    Value: !GetAtt McpAgentFunction.Arn
+  McpAgentFunctionName:
+    Description: MCP Agent function name
+    Value: !Ref McpAgentFunction
+  AgentRegistryTableName:
+    Description: AgentRegistry DynamoDB table name
+    Value: !Ref AgentRegistryTable
+  AgentRegistryTableArn:
+    Description: AgentRegistry DynamoDB table ARN
+    Value: !GetAtt AgentRegistryTable.Arn
