@@ -1,0 +1,8 @@
+target/
+.aws-sam/
+*.md
+*.toml
+!Cargo.toml
+scripts/
+diagrams/
+.durable-validation/
