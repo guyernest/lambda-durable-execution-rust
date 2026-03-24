@@ -1,557 +1,874 @@
 # Architecture Patterns
 
-**Domain:** Durable Lambda MCP Agent
-**Researched:** 2026-03-23
+**Domain:** Durable Lambda MCP Agent Platform -- Channels, Agent Teams, pmcp-run Integration
+**Researched:** 2026-03-24
+**Milestone:** v2.0 Integration Plan
+**Confidence:** HIGH for SDK integration points (verified from source), MEDIUM for cross-system data flow (inferred from multiple codebase reads), LOW for MCP Tasks integration (spec is experimental)
 
-## Recommended Architecture
+## Context: What Already Exists
 
-The agent is a single Durable Lambda binary that implements a classic LLM agent loop (call LLM, execute tools, repeat) using the durable execution SDK for checkpointing. Each LLM call and each batch of tool executions is a durable `step()`, making the entire agent loop replay-safe across Lambda suspensions and restarts.
-
-### High-Level Structure
-
-```
-                                    +----------------------------------+
-                                    |        Agent Lambda Binary       |
-                                    |                                  |
-                                    |  +----------------------------+  |
-+----------------+                  |  |     Agent Handler          |  |
-| AgentRegistry  |   DynamoDB Get   |  |                            |  |
-| (DynamoDB)     | <--------------> |  |  1. Load config (step)     |  |
-+----------------+                  |  |  2. Connect MCP (step)     |  |
-                                    |  |  3. Agent Loop:            |  |
-+----------------+                  |  |     a. Call LLM (step)     |  |
-| Anthropic API  | <--------------> |  |     b. If tool_use:        |  |
-| (Claude)       |   HTTPS          |  |        Execute tools (map) |  |
-+----------------+                  |  |     c. Append results      |  |
-                                    |  |     d. Goto 3a             |  |
-+----------------+                  |  |  4. Return final response  |  |
-| MCP Servers    | <--------------> |  |                            |  |
-| (HTTP/SSE)     |   MCP Protocol   |  +----------------------------+  |
-+----------------+                  |                                  |
-                                    |  +----------------------------+  |
-                                    |  | Durable Execution SDK      |  |
-                                    |  | (step, map, checkpoint)    |  |
-                                    |  +----------------------------+  |
-                                    +----------------------------------+
-                                                    |
-                                        Checkpoint API calls
-                                                    |
-                                    +----------------------------------+
-                                    | AWS Durable Execution            |
-                                    | Control Plane                    |
-                                    +----------------------------------+
-```
-
-### Component Boundaries
-
-| Component | Responsibility | Communicates With | Crate/Module |
-|-----------|---------------|-------------------|--------------|
-| **Agent Handler** | Orchestrates the agent loop: config loading, MCP connection, LLM calling, tool execution, message history management | All other components | `examples/src/bin/mcp_agent/handler.rs` |
-| **Config Loader** | Reads agent configuration from AgentRegistry DynamoDB table (system prompt, model, MCP server endpoints, parameters) | DynamoDB via AWS SDK | `examples/src/bin/mcp_agent/config.rs` |
-| **MCP Client Manager** | Connects to MCP servers, discovers tools via `list_tools()`, executes tools via `call_tool()`, translates MCP tool schemas to Claude API format | MCP servers via pmcp `HttpTransport` | `examples/src/bin/mcp_agent/mcp.rs` |
-| **LLM Caller** | Builds Anthropic Messages API requests, sends them, parses responses including `tool_use` content blocks | Anthropic API via HTTPS | `examples/src/bin/mcp_agent/llm.rs` |
-| **Message History** | Manages the conversation state (user/assistant/tool_result messages), serializes for checkpointing | Agent Handler (in-memory) | `examples/src/bin/mcp_agent/messages.rs` |
-| **Durable Execution SDK** | Provides `step()` and `map()` for replay-safe checkpointed operations | AWS Durable Execution Control Plane | `lambda-durable-execution-rust` (this crate) |
-
-### Data Flow
-
-#### Initial Invocation
-
-```
-1. AWS Control Plane invokes Lambda with DurableExecutionInvocationInput
-   containing AgentRequest { user_message, agent_name, agent_version }
-
-2. handler() begins:
-
-   2a. ctx.step("load-config") -> AgentConfig
-       - Read AgentRegistry DynamoDB item
-       - Returns: system_prompt, model, mcp_servers[], parameters
-       - Checkpointed: config is stable for this execution
-
-   2b. ctx.step("discover-tools") -> Vec<ClaudeTool>
-       - For each MCP server in config:
-         - Connect via HttpTransport
-         - Call list_tools()
-         - Translate MCP tool schemas to Claude API tool format
-       - Returns: merged tool list from all servers
-       - Checkpointed: tool schemas are stable for this execution
-
-   2c. Initialize message_history = [user_message]
-
-   2d. LOOP (iteration i = 0, 1, 2, ...):
-
-       2d-i. ctx.step("llm-call-{i}") -> AssistantMessage
-             - Build Messages API request:
-               { model, system: system_prompt, messages: message_history, tools }
-             - POST to Anthropic API
-             - Returns: AssistantMessage with content blocks
-             - Checkpointed: LLM response is deterministic on replay
-
-       2d-ii. Parse assistant response:
-              - If stop_reason == "end_turn" -> break loop, return final text
-              - If stop_reason == "tool_use" -> extract tool_use blocks
-
-       2d-iii. Append assistant message to message_history
-
-       2d-iv. ctx.map("tools-{i}", tool_calls, execute_tool) -> Vec<ToolResult>
-              - For each tool_use block:
-                - Determine which MCP server owns the tool
-                - Connect to MCP server (fresh connection per map item)
-                - call_tool(name, arguments)
-                - Return ToolResult { tool_use_id, content }
-              - Checkpointed per-item: each tool result is individually replay-safe
-
-       2d-v. Append tool_result user message to message_history
-
-3. Return final text response as execution result
-```
-
-#### Replay Invocation
-
-```
-1. AWS Control Plane re-invokes Lambda with updated initial_execution_state
-   containing all previously checkpointed operations
-
-2. handler() re-runs FROM THE BEGINNING:
-
-   2a. ctx.step("load-config") -> Cache hit! Returns immediately from replay data
-   2b. ctx.step("discover-tools") -> Cache hit! Returns immediately
-   2c. Initialize message_history (from event, same as before)
-   2d. LOOP replays:
-       - ctx.step("llm-call-0") -> Cache hit!
-       - ctx.map("tools-0", ...) -> Cache hit (all items)!
-       - ctx.step("llm-call-1") -> Cache hit!
-       - ctx.map("tools-1", ...) -> PARTIAL: items 0,1 cached, item 2 executes fresh
-       - ctx.step("llm-call-2") -> NEW: executes fresh, checkpoints
-
-   Each step that hits cache returns instantly; execution resumes
-   exactly where it left off.
-```
-
-### Replay Safety Analysis
-
-This is the most architecturally critical section. The durable execution model re-runs the handler from scratch on every invocation, replaying cached results for previously completed operations. Side effects must only happen inside `step()` closures.
-
-#### What is Replay-Safe
-
-| Operation | Replay Behavior | Notes |
-|-----------|----------------|-------|
-| `ctx.step("load-config", \| \| { dynamodb.get_item() })` | Cached on replay | Config read once, reused on all replays |
-| `ctx.step("discover-tools", \| \| { mcp.list_tools() })` | Cached on replay | Tool schemas read once per execution |
-| `ctx.step("llm-call-N", \| \| { anthropic.messages() })` | Cached on replay | LLM response checkpointed; identical result on replay |
-| `ctx.map("tools-N", calls, \| call \| { mcp.call_tool() })` | Per-item caching | Each tool call individually checkpointed |
-| Message history construction from step results | Deterministic | Rebuilt identically from cached step outputs |
-
-#### What is NOT Replay-Safe (and must be avoided)
-
-| Anti-pattern | Why Dangerous | Correct Alternative |
-|--------------|--------------|---------------------|
-| Connecting to MCP servers outside `step()` | Connection created on every replay, wasting time/resources | Connect inside `step()` or lazily inside tool execution steps |
-| Reading config outside `step()` | DynamoDB read on every replay; config could change between invocations | Wrap in `step()` to checkpoint |
-| Building message history from external state | Could differ between replays, breaking determinism | Build only from checkpointed step results |
-| Using `Instant::now()` or randomness in handler body | Non-deterministic across replays | Use only inside `step()` closures |
-
-#### MCP Connection Strategy: Connect-Per-Use (Recommended)
-
-MCP client connections (`HttpTransport`) are stateful TCP connections. They cannot survive Lambda suspension. Three strategies were considered:
-
-**Option A: Connect once at handler start (rejected)**
-- Connection created before any step, outside durable context
-- Connection dies on Lambda suspend; reconnection logic needed on every replay
-- Tool execution would fail if connection stale
-
-**Option B: Connect once in a step, pass connection through loop (rejected)**
-- Connection checkpointed as "completed" but the actual TCP socket is dead on replay
-- `step()` returns the cached *result*, not the live connection
-- Would need to deserialize a connection (impossible)
-
-**Option C: Connect-per-use inside step closures (recommended)**
-- Each `step("discover-tools")` creates fresh MCP connections, calls `list_tools()`, and returns serializable tool schemas
-- Each tool execution step in `ctx.map()` creates a fresh connection, calls `call_tool()`, and returns the serializable result
-- Connections are ephemeral; only serializable results are checkpointed
-- On replay, cached results are returned directly (no connection needed)
-- On fresh execution, a new connection is created (always valid)
-
-This matches how the existing SDK examples handle external calls: the side effect (HTTP request) happens inside `step()`, and only the serializable result is checkpointed.
-
-**Performance note:** HTTP/SSE MCP connections to other Lambdas are cheap to establish (same VPC, low latency). The overhead of reconnecting per-use is negligible compared to LLM call latency. If profiling shows connection overhead matters, a connection cache local to a single invocation (not checkpointed) can be added without architectural changes.
-
-### Message History: Serialization and Checkpoint Limits
-
-Message history grows with each iteration of the agent loop. Each LLM response and each set of tool results adds to it. The 750KB checkpoint batch limit and 256KB per-operation payload limit are constraints.
-
-**Strategy:** Message history is not stored as a single monolithic checkpoint. Instead, it is *reconstructed* from individual step results during replay:
-
-```
-message_history = [initial_user_message]
-for each iteration:
-    llm_response = ctx.step("llm-call-{i}", ...).await?   // cached on replay
-    message_history.push(assistant_message_from(llm_response))
-
-    tool_results = ctx.map("tools-{i}", ...).await?        // cached on replay
-    message_history.push(tool_result_message_from(tool_results))
-```
-
-Each individual step caches only its own output (one LLM response, or one tool result). The full history is rebuilt deterministically from these cached pieces. This distributes checkpoint storage across many small operations rather than one growing blob.
-
-**Limit analysis for a 10-iteration agent run:**
-- Each LLM response: ~2-10KB typical (model output)
-- Each tool result: varies, but typically 1-50KB per tool
-- With 10 iterations and 3 tools per iteration: ~30 checkpointed operations
-- Total: well within 750KB batch limits per checkpoint call
-
-**If a single LLM response exceeds 256KB:** The SDK already handles large payloads (see `CHECKPOINT_SIZE_LIMIT_BYTES` in `durable_context/mod.rs`). The `Serdes` trait can be used to compress large payloads, and the checkpoint manager batches operations to stay within 750KB per batch. For extremely long conversations, a `max_iterations` guard prevents unbounded growth.
-
-### Anthropic Messages API Data Model
-
-The agent needs these core types. They should be defined in the agent binary, not in the SDK crate.
-
-```rust
-// Request
-struct MessagesRequest {
-    model: String,
-    max_tokens: u32,
-    system: Option<String>,
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
-}
-
-struct Message {
-    role: String,           // "user" or "assistant"
-    content: Vec<ContentBlock>,
-}
-
-enum ContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
-    ToolResult { tool_use_id: String, content: String, is_error: Option<bool> },
-}
-
-// Response
-struct MessagesResponse {
-    content: Vec<ContentBlock>,
-    stop_reason: String,    // "end_turn" or "tool_use"
-    usage: Usage,
-}
-
-// Tool definition (Claude API format)
-struct Tool {
-    name: String,
-    description: Option<String>,
-    input_schema: serde_json::Value,  // JSON Schema object
-}
-```
-
-### MCP-to-Claude Tool Schema Translation
-
-MCP `list_tools()` returns tools with JSON Schema `inputSchema`. The Claude API expects `input_schema` in the same JSON Schema format. The translation is straightforward:
-
-```rust
-fn mcp_tool_to_claude_tool(mcp_tool: &McpTool) -> Tool {
-    Tool {
-        name: mcp_tool.name.clone(),
-        description: mcp_tool.description.clone(),
-        input_schema: mcp_tool.input_schema.clone(),  // Already JSON Schema
-    }
-}
-```
-
-The field names differ (`inputSchema` in MCP vs `input_schema` in Claude API) but the content is identical JSON Schema. No deep transformation needed -- just a struct mapping.
-
-**Tool routing:** When the LLM returns a `tool_use` block, the agent needs to know which MCP server to call. Maintain a `HashMap<String, McpServerConfig>` mapping tool names to their origin server. Built during `discover-tools` step, reconstructable from cached tool discovery results.
-
-## Patterns to Follow
-
-### Pattern 1: Durable Agent Loop
-
-The core pattern: a `loop` with durable steps for LLM calls and `map` for tool execution.
-
-```rust
-async fn agent_handler(
-    event: AgentRequest,
-    ctx: DurableContextHandle,
-) -> DurableResult<AgentResponse> {
-    // Phase 1: Setup (checkpointed)
-    let config: AgentConfig = ctx
-        .step(Some("load-config"), |_| async move {
-            load_agent_config(&event.agent_name, &event.agent_version).await
-        }, None)
-        .await?;
-
-    let tools_with_routing: ToolsWithRouting = ctx
-        .step(Some("discover-tools"), |_| async move {
-            discover_all_tools(&config.mcp_servers).await
-        }, None)
-        .await?;
-
-    // Phase 2: Agent loop
-    let mut messages: Vec<Message> = vec![user_message(&event.user_message)];
-    let max_iterations = config.parameters.max_iterations.unwrap_or(10);
-
-    for i in 0..max_iterations {
-        // LLM call (checkpointed)
-        let llm_response: MessagesResponse = ctx
-            .step(Some(&format!("llm-call-{i}")), |_| {
-                let req = build_request(&config, &messages, &tools_with_routing.tools);
-                async move { call_anthropic(req).await }
-            }, None)
-            .await?;
-
-        messages.push(assistant_message_from(&llm_response));
-
-        if llm_response.stop_reason == "end_turn" {
-            return Ok(extract_final_response(&llm_response));
-        }
-
-        // Tool execution (checkpointed per-tool via map)
-        let tool_calls = extract_tool_uses(&llm_response);
-        let routing = tools_with_routing.routing.clone();
-
-        let results: BatchResult<ToolResult> = ctx
-            .map(
-                Some(&format!("tools-{i}")),
-                tool_calls,
-                move |call, item_ctx, idx| {
-                    let routing = routing.clone();
-                    async move {
-                        item_ctx.step(
-                            Some(&format!("tool-{}", call.name)),
-                            |_| async move {
-                                execute_mcp_tool(&call, &routing).await
-                            },
-                            None,
-                        ).await
-                    }
-                },
-                None,
-            )
-            .await?;
-
-        messages.push(tool_results_message(results.values()));
-    }
-
-    Err(DurableError::Internal("Max iterations exceeded".into()))
-}
-```
-
-**Why this works:**
-- Step names include iteration index (`llm-call-0`, `llm-call-1`) ensuring unique deterministic IDs
-- `messages` is rebuilt from step results on replay (each `step()` returns the cached value)
-- Tool calls fan out via `map()`, giving per-tool checkpointing and bounded concurrency
-- MCP connections are ephemeral (created inside step closures, not persisted)
-
-### Pattern 2: Config Loading with Checkpointing
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AgentConfig {
-    system_prompt: String,
-    model: String,
-    mcp_servers: Vec<McpServerEndpoint>,
-    parameters: AgentParameters,
-}
-
-async fn load_agent_config(
-    agent_name: &str,
-    agent_version: &str,
-) -> Result<AgentConfig, Box<dyn Error + Send + Sync>> {
-    let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let ddb = aws_sdk_dynamodb::Client::new(&sdk_config);
-
-    let result = ddb.get_item()
-        .table_name("AgentRegistry")
-        .key("agent_name", AttributeValue::S(agent_name.into()))
-        .key("version", AttributeValue::S(agent_version.into()))
-        .send()
-        .await?;
-
-    // Parse DynamoDB item into AgentConfig
-    parse_agent_config(result.item())
-}
-```
-
-### Pattern 3: Tool Discovery with Server-to-Tool Routing
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ToolsWithRouting {
-    tools: Vec<Tool>,                         // Claude API format
-    routing: HashMap<String, McpServerEndpoint>, // tool_name -> server
-}
-
-async fn discover_all_tools(
-    servers: &[McpServerEndpoint],
-) -> Result<ToolsWithRouting, Box<dyn Error + Send + Sync>> {
-    let mut tools = Vec::new();
-    let mut routing = HashMap::new();
-
-    for server in servers {
-        let transport = HttpTransport::new(&server.url)?;
-        let client = Client::new(transport).await?;
-        let server_tools = client.list_tools().await?;
-
-        for mcp_tool in server_tools {
-            routing.insert(mcp_tool.name.clone(), server.clone());
-            tools.push(mcp_tool_to_claude_tool(&mcp_tool));
-        }
-    }
-
-    Ok(ToolsWithRouting { tools, routing })
-}
-```
-
-### Pattern 4: MCP Tool Execution with Fresh Connections
-
-```rust
-async fn execute_mcp_tool(
-    call: &ToolUseBlock,
-    routing: &HashMap<String, McpServerEndpoint>,
-) -> Result<ToolResult, Box<dyn Error + Send + Sync>> {
-    let server = routing.get(&call.name)
-        .ok_or_else(|| format!("Unknown tool: {}", call.name))?;
-
-    // Fresh connection per tool call -- replay-safe
-    let transport = HttpTransport::new(&server.url)?;
-    let client = Client::new(transport).await?;
-
-    let result = client.call_tool(&call.name, call.input.clone()).await?;
-
-    Ok(ToolResult {
-        tool_use_id: call.id.clone(),
-        content: result.content_as_text(),
-        is_error: result.is_error,
-    })
-}
-```
-
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Shared Mutable State Across Steps
-
-**What:** Storing MCP connections, HTTP clients, or mutable state in the handler scope and referencing them across multiple `step()` calls.
-
-**Why bad:** On replay, `step()` returns cached results without executing the closure. Any side effects on shared state (like updating a connection pool) are skipped. The shared state becomes inconsistent between replay and execution modes.
-
-**Instead:** Each `step()` closure should be self-contained. Create connections inside the closure. Return all needed data as the step result.
-
-### Anti-Pattern 2: Monolithic Message History Checkpoint
-
-**What:** Checkpointing the entire `Vec<Message>` as a single step result after each iteration.
-
-**Why bad:** Message history grows linearly. At 10 iterations with verbose tool results, a single checkpoint could exceed 256KB. Also, this would require a separate step just for history persistence, adding overhead.
-
-**Instead:** Let message history be an emergent property of individual step results. Rebuild it from `step("llm-call-N")` and `map("tools-N")` results during replay.
-
-### Anti-Pattern 3: Non-Deterministic Step Names
-
-**What:** Using timestamps, random IDs, or external state in step names.
-
-**Why bad:** The SDK generates deterministic operation IDs from step names/sequence. If names differ between invocations, replay cannot match operations to cached results. The handler would re-execute already-completed work or fail with mismatched state.
-
-**Instead:** Use iteration indices (`llm-call-0`, `tools-0`) or fixed names (`load-config`, `discover-tools`). The SDK's `next_operation_id()` handles sequence numbering.
-
-### Anti-Pattern 4: Trying to Checkpoint MCP Connections
-
-**What:** Attempting to serialize/deserialize MCP client connections or HTTP transports via `Serdes`.
-
-**Why bad:** TCP connections cannot be serialized. Even if you could serialize connection metadata, the socket is dead after Lambda suspension.
-
-**Instead:** Only checkpoint serializable results (tool schemas, tool call results). Re-create connections when needed for fresh execution.
-
-### Anti-Pattern 5: Putting the Agent Loop Inside `run_in_child_context`
-
-**What:** Wrapping the entire agent loop in a child context.
-
-**Why bad:** Child contexts create a nested operation scope. The agent loop's step names (`llm-call-0`, etc.) would all be scoped under one parent context operation. If the child context fails, all inner operations are lost. Child contexts are for grouping related sub-operations, not for top-level flows.
-
-**Instead:** Run the agent loop directly in the top-level handler. Use `map()` for tool call fan-out (which already uses child contexts internally for each item).
-
-## Suggested Build Order
-
-Based on component dependencies, build in this order:
-
-```
-Phase 1: Types + LLM Caller
-  - Define message types (Request, Response, ContentBlock, Tool)
-  - Implement Anthropic API HTTP client
-  - Test: send a message, get a response
-  Dependencies: None
-
-Phase 2: MCP Client Integration
-  - Integrate pmcp Client with HttpTransport
-  - Implement tool discovery (list_tools)
-  - Implement tool execution (call_tool)
-  - Implement MCP-to-Claude tool schema translation
-  - Test: connect to MCP server, discover tools, call a tool
-  Dependencies: Phase 1 types (Tool struct)
-
-Phase 3: Config Loader
-  - Define AgentConfig, McpServerEndpoint types
-  - Implement DynamoDB reader
-  - Test: load config from DynamoDB
-  Dependencies: None (can parallelize with Phase 1-2)
-
-Phase 4: Agent Handler (integration)
-  - Wire all components into durable handler
-  - Implement the agent loop with step() and map()
-  - Implement message history management
-  - Test: end-to-end with mock MCP server and mock Anthropic API
-  Dependencies: Phases 1, 2, 3
-
-Phase 5: Deployment
-  - Add to SAM template
-  - Configure DurableConfig, permissions (DynamoDB, Secrets Manager, VPC)
-  - Deploy and validate with real MCP servers
-  Dependencies: Phase 4
-```
-
-**Critical path:** Phase 1 -> Phase 2 -> Phase 4. Phase 3 is parallelizable.
-
-## Scalability Considerations
-
-| Concern | At 1 agent | At 10 agents | At 100+ agents |
-|---------|------------|--------------|----------------|
-| MCP connections | Ephemeral per-use, trivial | Same pattern, no pooling needed | Consider connection reuse within a single invocation |
-| Checkpoint size | ~50-200KB per iteration | Same (per-execution isolation) | Same (each execution is independent) |
-| DynamoDB reads | 1 read per execution (cached by step) | 10 reads total (each cached) | Use DynamoDB DAX if read throughput matters |
-| LLM API rate limits | Not an issue | May approach limits | Token bucket / backoff via step retry strategies |
-| Message history size | 10 iterations ~50KB | Same | Add max_tokens guard + conversation summarization step |
-| Lambda concurrent executions | Default 1000 | Sufficient | Request limit increase; each agent is one concurrent execution |
-
-## Binary Structure Decision
-
-**Recommended: Example binary in this repo** (matching PROJECT.md decision)
-
-Place the agent binary at `examples/src/bin/mcp_agent/` with this structure:
+Before describing new components, here is the system as-built after v1.0:
 
 ```
 examples/src/bin/mcp_agent/
-  main.rs           -- Lambda entry point, with_durable_execution_service()
-  handler.rs        -- agent_handler() function with the durable loop
-  config.rs         -- AgentConfig, DynamoDB loader
-  llm.rs            -- Anthropic API client, request/response types
-  mcp.rs            -- MCP client wrapper, tool discovery, tool execution
-  messages.rs       -- Message history types, Anthropic message format
-  types.rs          -- Shared types (AgentRequest, AgentResponse, ToolResult)
+  main.rs              -- Lambda entry: init LLM service, with_durable_execution_service()
+  handler.rs           -- agent_handler(): load config -> discover tools -> agent loop
+  config/
+    loader.rs          -- DynamoDB GetItem, parse_agent_config(), map_provider_config()
+    types.rs           -- AgentConfig, AgentParameters
+  llm/
+    service.rs         -- UnifiedLLMService::process(LLMInvocation) -> LLMResponse
+    models.rs          -- ProviderConfig, UnifiedMessage, ContentBlock, FunctionCall, etc.
+    error.rs           -- LLMError enum
+    transformers/      -- Anthropic and OpenAI request/response transformers
+  mcp/
+    client.rs          -- discover_all_tools(), establish_mcp_connections(), execute_tool_call()
+    types.rs           -- ToolsWithRouting { tools, routing }
+    error.rs           -- McpError enum
+  types.rs             -- AgentRequest, AgentResponse, AgentMetadata, IterationResult, ToolCallResult
 ```
 
-This follows the existing example binary pattern (see `map_operations/main.rs`, `child_context/main.rs`) and keeps the PoC close to the SDK. The binary depends on:
-- `lambda-durable-execution-rust` (this crate, via `path = ".."`)
-- `pmcp` (MCP SDK, new dependency in `examples/Cargo.toml`)
-- `reqwest` (for Anthropic API calls)
-- `aws-sdk-dynamodb` (for config loading)
-- `aws-sdk-secretsmanager` (for API key retrieval)
+**SAM deployment:** `examples/template-agent.yaml` -- single Lambda with DurableConfig, AgentRegistry DynamoDB table.
+
+**Durable SDK primitives used:** `ctx.step()` (config load, tool discovery, LLM calls), `ctx.map()` (parallel tool execution), `ctx.run_in_child_context()` (per-iteration isolation).
+
+**Durable SDK primitives NOT yet used:** `ctx.wait_for_callback()`, `ctx.wait()`, `ctx.invoke()`, `ctx.parallel()`.
+
+## Recommended Architecture: v2.0 Extension
+
+The v2.0 milestone adds three major capabilities to the existing agent binary. The core architectural principle is: **new features compose with existing primitives rather than replacing them**. Channels wrap `wait_for_callback()`. Agent Teams wrap `ctx.invoke()` and MCP server generation. The pmcp-run Agents tab is a UI layer over the existing AgentRegistry + new DynamoDB fields.
+
+### System Overview
+
+```
++------------------+     +------------------+     +------------------+
+|   pmcp-run UI    |     |  External APIs   |     | Agent Lambda B   |
+|  (Next.js LCARS) |     | (Slack, Discord) |     | (Team member)    |
++--------+---------+     +--------+---------+     +--------+---------+
+         |                         |                        |
+    AppSync GraphQL          Webhook / API             ctx.invoke()
+         |                         |                        |
++--------+---------+     +--------+---------+     +--------+---------+
+| Agent Lambda A   |<--->| Channel Router   |<--->| Dynamic MCP Srvr |
+| (Durable Agent)  |     | (in-handler)     |     | (agent-as-tool)  |
++--------+---------+     +------------------+     +------------------+
+         |
+   Checkpoint API
+         |
++--------+---------+
+| AWS Durable Exec |
+| Control Plane    |
++------------------+
+```
+
+### Component Boundaries (New + Modified)
+
+| Component | Status | Responsibility | Location |
+|-----------|--------|---------------|----------|
+| **Channel Router** | NEW | Maps named channels to `wait_for_callback()` + external delivery | `mcp_agent/channels/` |
+| **Channel Config** | MODIFIED | Extends AgentConfig with channel definitions | `mcp_agent/config/types.rs` |
+| **Channel Adapters** | NEW | Slack, Discord, WebSocket, Lambda Callback adapter implementations | `mcp_agent/channels/adapters/` |
+| **Agent Team Orchestrator** | NEW | Dynamic MCP server generation, parallel agent invocation | `mcp_agent/teams/` |
+| **Agent-as-MCP-Server** | NEW | Wraps a Durable Agent Lambda as an MCP tool | `mcp_agent/teams/agent_server.rs` |
+| **Generic Agent Lambda** | MODIFIED | Config-driven agent: reads channel config, team config from registry | `mcp_agent/handler.rs` |
+| **AgentRegistry Schema** | MODIFIED | New fields: `channels`, `team_config`, `agent_type` | DynamoDB (additive) |
+| **pmcp-run Agents Tab** | NEW | UI pages for agent CRUD, execution, scheduling, history | `pmcp-run/app/(authenticated)/agents/` |
+| **pmcp-run Agent API** | NEW | AppSync queries/mutations for agent management | `pmcp-run/amplify/data/resource.ts` |
+| **PMCP SDK Example** | NEW | Reference example showing MCP Tasks + client patterns | `rust-mcp-sdk/examples/` |
+
+---
+
+## Component 1: Channels Layer
+
+### Problem
+
+The existing agent loop runs to completion without external interaction. `wait_for_callback()` exists in the SDK but requires the agent to know the AWS `SendDurableExecutionCallbackSuccess` API details. We need a named, config-driven abstraction that maps "ask the user on Slack for approval" to the right SDK primitive.
+
+### Architecture
+
+The Channel Router lives **inside the agent handler**, not as a separate service. It is a library module that the agent loop calls when it needs external interaction. The router:
+
+1. Accepts a channel name (e.g., `"slack-approvals"`, `"discord-team"`)
+2. Looks up the channel configuration from `AgentConfig.channels`
+3. Sends the outbound message via the appropriate adapter
+4. Calls `ctx.wait_for_callback()` to suspend the Lambda
+5. Returns the external response when the callback completes
+
+```
+Agent Loop (handler.rs)
+    |
+    |-- needs approval for tool X
+    |
+    v
+Channel Router (channels/router.rs)
+    |
+    |-- resolve channel name -> ChannelConfig
+    |-- instantiate adapter (Slack, Discord, etc.)
+    |-- send outbound message via adapter
+    |-- call ctx.wait_for_callback() with submitter that delivers callback_id
+    |-- Lambda suspends (zero cost)
+    |
+    ... external system receives message + callback_id ...
+    ... external system calls SendDurableExecutionCallbackSuccess ...
+    |
+    v
+Agent Loop resumes with callback result
+```
+
+### Channel Trait (Adapted from ZeroClaw)
+
+ZeroClaw's `Channel` trait has `send()` and `listen()`. For Durable Lambda, `listen()` is not applicable -- the Lambda suspends rather than polling. We adapt the trait:
+
+```rust
+/// Durable-execution-compatible channel adapter.
+///
+/// Unlike zeroclaw's Channel trait which has `listen()` for long-running
+/// polling, this trait only has `deliver()` -- the Lambda suspends via
+/// `wait_for_callback()` rather than actively listening.
+#[async_trait]
+pub trait ChannelAdapter: Send + Sync {
+    /// Human-readable channel type name.
+    fn channel_type(&self) -> &str;
+
+    /// Deliver a message to the external system with the callback_id
+    /// so the external system knows how to respond.
+    ///
+    /// The adapter is responsible for formatting the message appropriately
+    /// for its platform and including instructions for callback completion.
+    async fn deliver(
+        &self,
+        message: &ChannelMessage,
+        callback_id: &str,
+    ) -> Result<(), ChannelError>;
+
+    /// Optional health check.
+    async fn health_check(&self) -> bool { true }
+}
+```
+
+### Channel Adapters
+
+| Adapter | Transport | How Callback Completes | Complexity |
+|---------|-----------|----------------------|------------|
+| **SlackAdapter** | Slack Web API (`chat.postMessage`) | Slack Bolt webhook -> API Gateway -> Lambda that calls `SendDurableExecutionCallbackSuccess` | Medium |
+| **DiscordAdapter** | Discord REST API (`/channels/{id}/messages`) | Discord interaction webhook -> same callback Lambda | Medium |
+| **WebhookAdapter** | Generic HTTP POST | Target system calls `SendDurableExecutionCallbackSuccess` directly or via a relay | Low |
+| **LambdaCallbackAdapter** | Direct `SendDurableExecutionCallbackSuccess` | For programmatic callbacks (agent-to-agent, tests) | Low |
+
+### Callback Relay Pattern
+
+External systems (Slack, Discord) cannot call `SendDurableExecutionCallbackSuccess` directly -- they need an HTTP endpoint. The solution is a thin **Callback Relay Lambda** behind API Gateway:
+
+```
+Slack Button Click
+    -> Slack sends interaction payload to API Gateway
+    -> Callback Relay Lambda extracts callback_id from payload
+    -> Calls lambda:SendDurableExecutionCallbackSuccess(callback_id, result)
+    -> Agent Lambda resumes
+```
+
+The Callback Relay is a generic, reusable Lambda -- not per-agent. It validates the callback_id format and forwards. The `SendDurableExecutionCallbackSuccess` API endpoint is:
+
+```
+POST /2025-12-01/durable-execution-callbacks/{CallbackId}/succeed
+Body: { "Result": <binary, max 256KB> }
+```
+
+### Channel Configuration (AgentRegistry Extension)
+
+New `channels` field in AgentRegistry (JSON string, additive):
+
+```json
+{
+  "channels": {
+    "slack-approvals": {
+      "type": "slack",
+      "bot_token_secret": "/ai-agent/slack/bot-token",
+      "default_channel_id": "C0123ABCDEF",
+      "allowed_users": ["U12345", "U67890"],
+      "message_template": "Agent {{agent_name}} needs approval:\n{{message}}\n\nCallback: {{callback_url}}"
+    },
+    "discord-alerts": {
+      "type": "discord",
+      "bot_token_secret": "/ai-agent/discord/bot-token",
+      "channel_id": "1234567890",
+      "webhook_url": "https://discord.com/api/webhooks/..."
+    },
+    "programmatic": {
+      "type": "lambda_callback",
+      "description": "Direct callback for automated workflows"
+    }
+  }
+}
+```
+
+### Integration with Agent Loop
+
+The channel router is called as a **tool** that the LLM can invoke, not hardcoded into the loop. This is the cleanest integration:
+
+1. Add built-in channel tools alongside MCP-discovered tools during tool discovery
+2. The LLM calls `channels__request_approval` (or similar) like any other tool
+3. The tool execution handler recognizes channel tools, routes to the Channel Router
+4. The Channel Router calls `ctx.wait_for_callback()`
+5. The rest of the agent loop is unchanged
+
+```rust
+// In tool discovery phase, inject channel tools
+fn inject_channel_tools(
+    tools: &mut Vec<UnifiedTool>,
+    routing: &mut HashMap<String, String>,
+    channels: &HashMap<String, ChannelConfig>,
+) {
+    for (name, config) in channels {
+        tools.push(UnifiedTool {
+            name: format!("channels__send_{name}"),
+            description: format!("Send a message to the {} channel and wait for a response", name),
+            input_schema: channel_tool_schema(),
+        });
+        routing.insert(
+            format!("channels__send_{name}"),
+            format!("channel://{name}"),  // Special routing prefix
+        );
+    }
+}
+```
+
+When tool execution encounters a `channel://` routing prefix, it delegates to the Channel Router instead of an MCP server. This keeps the agent loop handler untouched.
+
+### Security Model
+
+Following zeroclaw's deny-by-default pattern:
+
+- Channels must be explicitly configured in AgentRegistry -- no implicit channel access
+- Each channel config specifies `allowed_users` (who can respond)
+- Callback Relay Lambda validates callback_id format before forwarding
+- Channel secrets (bot tokens) stored in Secrets Manager, not in DynamoDB
+- Timeout on `wait_for_callback()` prevents indefinite suspension (default 24h, configurable)
+
+---
+
+## Component 2: Agent Teams
+
+### Problem
+
+An orchestrator agent needs to delegate subtasks to specialist agents. In Step Functions, this requires complex state machine nesting. In Durable Lambda, `ctx.invoke()` can call another Lambda, but the calling agent needs to discover and describe the target agent's capabilities.
+
+### Architecture: Agents as MCP Tools
+
+The key insight: **an agent's capabilities can be described as an MCP tool**. An orchestrator agent discovers team members the same way it discovers MCP server tools -- through tool discovery. The difference is that "calling the tool" invokes another Durable Lambda agent instead of an MCP server.
+
+```
+Orchestrator Agent Lambda
+    |
+    |-- tool discovery phase:
+    |   1. Discover MCP server tools (existing)
+    |   2. Discover team member agents from config (NEW)
+    |      Generate synthetic tool definitions for each team member
+    |
+    |-- agent loop:
+    |   LLM sees tools: [mcp_server__tool_a, team__researcher, team__writer]
+    |   LLM calls team__researcher with { task: "Research topic X" }
+    |
+    |-- tool execution:
+    |   Routing detects "team://" prefix
+    |   ctx.invoke() calls Researcher Agent Lambda
+    |   Researcher runs its own agent loop (independent durable execution)
+    |   Result returned to orchestrator
+    |
+    |-- orchestrator continues with result
+```
+
+### Team Configuration (AgentRegistry Extension)
+
+New `team_config` field in AgentRegistry:
+
+```json
+{
+  "team_config": {
+    "role": "orchestrator",
+    "members": [
+      {
+        "agent_name": "research-agent",
+        "version": "v1",
+        "tool_name": "researcher",
+        "description": "Researches topics using web search and document analysis",
+        "function_arn": "arn:aws:lambda:us-east-1:123456789:function:McpAgent"
+      },
+      {
+        "agent_name": "writer-agent",
+        "version": "v1",
+        "tool_name": "writer",
+        "description": "Writes structured documents from research findings",
+        "function_arn": "arn:aws:lambda:us-east-1:123456789:function:McpAgent"
+      }
+    ],
+    "shared_context": {
+      "strategy": "summary",
+      "max_context_tokens": 4000
+    }
+  }
+}
+```
+
+### Team Member Tool Generation
+
+During tool discovery, the orchestrator generates synthetic tool definitions for each team member:
+
+```rust
+fn generate_team_tools(team_config: &TeamConfig) -> Vec<(UnifiedTool, String)> {
+    team_config.members.iter().map(|member| {
+        let tool = UnifiedTool {
+            name: format!("team__{}", member.tool_name),
+            description: member.description.clone(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task to delegate to this agent"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Additional context for the agent"
+                    }
+                },
+                "required": ["task"]
+            }),
+        };
+        let routing = format!("team://{}/{}", member.agent_name, member.version);
+        (tool, routing)
+    }).collect()
+}
+```
+
+### Team Member Invocation
+
+When the LLM calls a `team://` tool, the handler uses `ctx.invoke()` to call the member agent's Lambda:
+
+```rust
+async fn execute_team_call(
+    ctx: &DurableContextHandle,
+    member: &TeamMember,
+    task: &str,
+    shared_context: Option<&str>,
+) -> DurableResult<String> {
+    let request = AgentRequest {
+        agent_name: member.agent_name.clone(),
+        version: member.version.clone(),
+        messages: vec![UnifiedMessage {
+            role: "user".to_string(),
+            content: MessageContent::Text {
+                content: format_team_task(task, shared_context),
+            },
+        }],
+    };
+
+    // ctx.invoke() calls the member Lambda and waits for completion
+    // The member runs its own independent durable execution
+    let response: AgentResponse = ctx
+        .invoke(
+            Some(&format!("team-{}", member.tool_name)),
+            &member.function_arn,
+            &serde_json::to_value(&request)?,
+            None,
+        )
+        .await?;
+
+    // Extract text response from the member agent
+    extract_text_response(&response)
+}
+```
+
+### Shared Context Strategy
+
+Orchestrator-to-member context sharing has three options:
+
+| Strategy | How | When |
+|----------|-----|------|
+| **Full pass-through** | Send orchestrator's full message history to member | Small conversations, high coherence needed |
+| **Summary** | LLM-generated summary injected as context | Large conversations, token budget concerns |
+| **Task-only** | Only the task description, no conversation history | Independent subtasks |
+
+Default to **task-only** for v2.0. Summary and full pass-through add complexity and checkpoint size concerns. The task description is usually sufficient for delegation.
+
+### Single Lambda, Multiple Agents
+
+A critical design point: all agents (orchestrator and members) can use the **same Lambda function**. The `agent_name` in the request determines which AgentRegistry config to load. There is no need for separate Lambda functions per agent -- the config-driven approach means one Lambda binary serves all agents. The `function_arn` in team config points to the same Lambda.
+
+---
+
+## Component 3: pmcp-run Agents Tab
+
+### Problem
+
+Agents need a management UI. The Step Functions Agent project has a rich Amplify Gen 2 UI (12+ pages). Rather than rebuilding, we extend pmcp-run (which already has registry, deployment, and monitoring) with an Agents tab.
+
+### Data Model Additions (pmcp-run AppSync Schema)
+
+New models added to `pmcp-run/amplify/data/resource.ts`:
+
+```typescript
+// In the existing schema, add:
+
+AgentConfig: a.model({
+    id: a.id().required(),
+    organizationId: a.string().required(),
+
+    // Core
+    agentName: a.string().required(),
+    version: a.string().required(),
+    displayName: a.string(),
+    description: a.string(),
+    status: a.enum(['active', 'inactive', 'draft']),
+    agentType: a.enum(['standalone', 'orchestrator', 'team_member']),
+
+    // LLM Configuration
+    llmProvider: a.string().required(),     // "anthropic" | "openai"
+    llmModel: a.string().required(),        // "claude-sonnet-4-20250514"
+    systemPrompt: a.string().required(),
+    parameters: a.json(),                    // AgentParameters JSON
+
+    // MCP Servers (references to McpServer records)
+    mcpServerIds: a.string().array(),        // Links to McpServer.id
+    mcpServerUrls: a.json(),                 // Resolved URLs (denormalized for Lambda)
+
+    // Channels
+    channels: a.json(),                      // Channel configurations
+
+    // Team Configuration
+    teamConfig: a.json(),                    // TeamConfig JSON
+
+    // Deployment
+    lambdaFunctionArn: a.string(),           // Deployed Lambda ARN
+    lambdaFunctionName: a.string(),
+    deploymentStatus: a.enum(['not_deployed', 'deploying', 'deployed', 'failed']),
+    lastDeployedAt: a.datetime(),
+
+    // Scheduling
+    scheduleExpression: a.string(),          // EventBridge cron/rate expression
+    scheduleEnabled: a.boolean().default(false),
+    scheduleInput: a.json(),                 // Default AgentRequest for scheduled runs
+
+    // Metadata
+    createdAt: a.datetime(),
+    updatedAt: a.datetime(),
+    createdBy: a.string(),
+
+    // Relationships
+    organization: a.belongsTo('Organization', 'organizationId'),
+    executions: a.hasMany('AgentExecution', 'agentConfigId'),
+})
+.authorization((allow) => [allow.authenticated()]),
+
+AgentExecution: a.model({
+    id: a.id().required(),
+    organizationId: a.string().required(),
+    agentConfigId: a.string().required(),
+
+    // Execution
+    durableExecutionArn: a.string(),         // AWS Durable Execution ARN
+    status: a.enum(['running', 'succeeded', 'failed', 'suspended', 'timed_out']),
+    startedAt: a.datetime(),
+    completedAt: a.datetime(),
+
+    // Input/Output
+    inputMessages: a.json(),                 // Initial messages
+    outputResponse: a.json(),                // AgentResponse JSON
+    errorMessage: a.string(),
+
+    // Metadata
+    iterations: a.integer(),
+    totalInputTokens: a.integer(),
+    totalOutputTokens: a.integer(),
+    toolsCalled: a.string().array(),
+    elapsedMs: a.integer(),
+
+    // Relationships
+    agentConfig: a.belongsTo('AgentConfig', 'agentConfigId'),
+    organization: a.belongsTo('Organization', 'organizationId'),
+})
+.authorization((allow) => [allow.authenticated()]),
+```
+
+### Relationship to Existing AgentRegistry
+
+The pmcp-run `AgentConfig` model is the **source of truth** for agent configuration. The DynamoDB AgentRegistry table (used by the Lambda) is a **deployment artifact** -- when an agent is deployed via pmcp-run, its config is written to the AgentRegistry table in the format the Lambda expects.
+
+```
+pmcp-run AgentConfig (AppSync/DynamoDB)
+    |
+    |-- user creates/edits agent via UI
+    |-- includes mcpServerIds (links to pmcp-run McpServer records)
+    |
+    v
+Deploy Agent (Lambda function)
+    |
+    |-- resolve mcpServerIds -> MCP server URLs
+    |-- transform AgentConfig -> AgentRegistry item format
+    |-- write to AgentRegistry DynamoDB table
+    |-- update Lambda environment if needed
+    |
+    v
+AgentRegistry DynamoDB Table (agent_name PK, version SK)
+    |
+    |-- Lambda reads at runtime via load_agent_config()
+```
+
+This two-table approach avoids modifying the Lambda's config loading code. The pmcp-run model is richer (organization scoping, deployment status, scheduling) while the AgentRegistry table is flat and fast for Lambda reads.
+
+### UI Pages
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| Agent List | `/agents` | List all agents with status, last execution, quick actions |
+| Agent Detail | `/agents/[id]` | View config, recent executions, metrics |
+| Agent Editor | `/agents/[id]/edit` | Edit system prompt, model, MCP servers, channels, team config |
+| Agent Create | `/agents/new` | Wizard: choose type (standalone/orchestrator/member), configure |
+| Execution Detail | `/agents/[id]/executions/[execId]` | Durable execution trace, messages, tool calls, channel interactions |
+| Execution History | `/agents/[id]/executions` | List past executions with filters |
+
+### MCP Server Linking
+
+The pmcp-run Agents tab reuses the existing `McpServer` model. When configuring an agent's MCP servers, the UI presents a picker showing deployed MCP servers from the user's organization. Selected servers are stored as `mcpServerIds`. At deploy time, the server endpoints are resolved and written to `mcp_servers` in the AgentRegistry.
+
+This creates a natural bridge: pmcp-run hosts MCP servers AND manages the agents that use them.
+
+---
+
+## Component 4: PMCP SDK Reference Example
+
+### Problem
+
+The PMCP SDK (`rust-mcp-sdk` / `pmcp` crate) needs a reference example showing MCP Tasks and client patterns. This is separate from the agent binary but demonstrates how durable agents interact with task-capable MCP servers.
+
+### Architecture
+
+The example consists of:
+
+1. **Task-capable MCP Server** -- an MCP server built with `pmcp` that returns `Task` objects for long-running operations
+2. **Durable Client Example** -- a Durable Lambda that uses `pmcp` Client's `call_tool_with_task()` and polls `tasks_get()` via `ctx.step()` loops
+
+The `pmcp` Client already has the Task API surface (verified from source):
+- `call_tool_with_task()` returns `ToolCallResponse::Task(Task)` or `ToolCallResponse::Result(CallToolResult)`
+- `tasks_get(task_id)` returns `GetTaskResult` with `TaskStatus`
+- `tasks_result(task_id)` returns the final payload
+
+```rust
+// Durable handler that works with MCP Tasks
+let response = ctx.step(Some("start-long-task"), |_| async {
+    let client = create_mcp_client(&server_url).await?;
+    match client.call_tool_with_task("analyze_document", input).await? {
+        ToolCallResponse::Result(result) => Ok(TaskOrResult::Result(result)),
+        ToolCallResponse::Task(task) => Ok(TaskOrResult::Task(task.id)),
+    }
+}, None).await?;
+
+match response {
+    TaskOrResult::Task(task_id) => {
+        // Poll until complete using wait_for_condition
+        let result = ctx.wait_for_condition(
+            Some("poll-task"),
+            move |_| {
+                let id = task_id.clone();
+                let url = server_url.clone();
+                async move {
+                    let client = create_mcp_client(&url).await?;
+                    let status = client.tasks_get(&id).await?;
+                    match status.task.status {
+                        TaskStatus::Completed => Ok(WaitConditionDecision::Complete(status)),
+                        TaskStatus::Failed => Err("Task failed"),
+                        _ => Ok(WaitConditionDecision::Continue),
+                    }
+                }
+            },
+            Some(WaitConditionConfig::new()
+                .with_interval(Duration::seconds(5))
+                .with_timeout(Duration::minutes(30))),
+        ).await?;
+        // Use result
+    }
+    TaskOrResult::Result(result) => { /* immediate result */ }
+}
+```
+
+---
+
+## Cross-System Data Flow
+
+### How Systems Relate
+
+```
+Step Functions Agent (EXISTING)     pmcp-run (EXISTING)        Durable Agent (THIS REPO)
+==========================          ================           =======================
+AgentRegistry DynamoDB     <---deploy-from---- AgentConfig model     --reads--> AgentRegistry
+ToolRegistry DynamoDB      (deprecated)        (use MCP instead)
+MCPServerRegistry DynamoDB <---migrate-to----> McpServer model       --connects-> MCP servers
+LLMModels DynamoDB         <---migrate-to----> (in AgentConfig)
+TemplateRegistry DynamoDB  (not needed)
+
+Step Functions State Machine   (replaced by)   Durable Lambda
+CDK Python deployment          (replaced by)   SAM + pmcp-run deploy
+Amplify Gen 2 UI               (migrated to)   pmcp-run Agents tab
+```
+
+### Migration Path from Step Functions Agent
+
+The Step Functions Agent has these DynamoDB tables:
+- **AgentRegistry**: `agent_name` (PK), `version` (SK) -- system_prompt, llm_provider, llm_model, tools, state_machine_arn, observability, metadata
+- **ToolRegistry**: Individual tool definitions with Lambda ARNs
+- **MCPServerRegistry**: `server_id` (PK), `version` (SK) -- endpoint_url, available_tools, authentication_type
+- **LLMModels**: Provider-keyed model catalog
+
+For the Durable Agent:
+- **AgentRegistry** is reused with additive fields (`channels`, `team_config`, `mcp_servers`)
+- **ToolRegistry** is eliminated -- tools come from MCP servers via `list_tools()`
+- **MCPServerRegistry** maps to pmcp-run's `McpServer` model -- the deployed server URL IS the MCP endpoint
+- **LLMModels** is simplified to `llm_provider` + `llm_model` strings in AgentConfig
+
+### Channel Data Flow
+
+```
+1. User configures channel in pmcp-run UI
+   -> writes to AgentConfig.channels (AppSync)
+
+2. Agent deploys
+   -> channels config written to AgentRegistry DynamoDB
+   -> channel secrets referenced (not copied) from Secrets Manager
+
+3. Agent runs, LLM decides to use a channel tool
+   -> Channel Router reads channel config from loaded AgentConfig
+   -> Adapter sends message to external system (Slack API, etc.)
+   -> ctx.wait_for_callback() suspends Lambda
+
+4. External user responds
+   -> Slack interaction webhook -> API Gateway -> Callback Relay Lambda
+   -> Callback Relay calls SendDurableExecutionCallbackSuccess(callback_id, result)
+   -> Durable Execution control plane resumes agent Lambda
+
+5. Agent resumes with callback result
+   -> Channel Router returns result to agent loop
+   -> LLM continues reasoning with the response
+```
+
+### Team Invocation Data Flow
+
+```
+1. Orchestrator agent receives task
+   -> loads config including team_config
+   -> generates team member tool definitions
+
+2. LLM calls team__researcher tool
+   -> handler detects team:// routing prefix
+   -> builds AgentRequest for member agent
+
+3. ctx.invoke() calls the member Lambda
+   -> member Lambda is the SAME Lambda binary
+   -> member loads its own AgentConfig (different agent_name)
+   -> member runs its own independent durable execution
+   -> member returns AgentResponse
+
+4. Orchestrator receives member's result
+   -> result checkpointed as ctx.invoke() output
+   -> LLM continues with the research findings
+```
+
+---
+
+## Patterns to Follow
+
+### Pattern 1: Channel as Tool (not Loop Injection)
+
+**What:** Expose channels as tools the LLM can call, rather than hardcoding channel interactions into the agent loop.
+
+**When:** Always. This is the recommended integration pattern.
+
+**Why:** The LLM decides when to ask for approval or send messages. The agent loop code stays clean -- it does not need channel-specific branching. New channel types are added by configuration, not code changes.
+
+```rust
+// During tool discovery, inject channel tools
+let mut tools_with_routing = discover_mcp_tools(&config.mcp_server_urls).await?;
+
+if let Some(ref channels) = config.channels {
+    inject_channel_tools(&mut tools_with_routing, channels);
+}
+```
+
+### Pattern 2: Callback Relay for External Systems
+
+**What:** A thin, generic Lambda behind API Gateway that translates external webhook payloads into `SendDurableExecutionCallbackSuccess` calls.
+
+**When:** Any channel adapter that connects to an external system (Slack, Discord, custom webhooks).
+
+**Why:** External systems cannot call the Lambda API directly. The relay is stateless and reusable across all agents.
+
+```rust
+// Callback Relay Lambda handler (separate from agent Lambda)
+async fn callback_relay_handler(event: ApiGatewayEvent) -> Result<Response> {
+    let callback_id = extract_callback_id(&event)?;
+    let result = extract_result_payload(&event)?;
+
+    let client = aws_sdk_lambda::Client::new(&aws_config);
+    client.send_durable_execution_callback_success()
+        .callback_id(&callback_id)
+        .result(Blob::new(result))
+        .send()
+        .await?;
+
+    Ok(Response::ok())
+}
+```
+
+### Pattern 3: Config-Driven Agent Binary
+
+**What:** A single Lambda binary that reads all behavior from AgentRegistry. Agent type (standalone, orchestrator, team member), channels, MCP servers, and team config are all determined at runtime from config.
+
+**When:** Always. Do not create separate Lambda binaries for different agent types.
+
+**Why:** Deployment simplicity. One `sam deploy` for all agents. New agents are created by adding AgentRegistry items, not deploying new code.
+
+### Pattern 4: Team Member via ctx.invoke()
+
+**What:** Orchestrator agents call team members via `ctx.invoke()`, which creates a new durable execution for the member.
+
+**When:** Agent Teams feature.
+
+**Why:** Each member runs in its own durable execution with independent checkpointing. If the member fails, it can be retried without re-running the orchestrator. The member's execution history is separate and inspectable.
+
+---
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Channels as Middleware
+
+**What:** Inserting a channel middleware layer that intercepts every tool call or every LLM response.
+
+**Why bad:** Over-engineering. Not every tool call needs approval. The LLM should decide when to use channels, not a middleware layer. This also breaks the deterministic handler requirement -- middleware state between steps is not checkpointed.
+
+**Instead:** Channels are tools. The LLM calls them explicitly when it decides external input is needed.
+
+### Anti-Pattern 2: Persistent Channel Connections
+
+**What:** Maintaining WebSocket or SSE connections to Slack/Discord within the agent Lambda.
+
+**Why bad:** Lambda suspends during `wait_for_callback()`. Persistent connections die on suspension. On replay, connection state is lost. This is the same problem as MCP connections (Pitfall 3 from v1.0 research).
+
+**Instead:** Adapters use stateless HTTP calls (Slack Web API POST, Discord REST API POST). The callback return path uses API Gateway + Callback Relay.
+
+### Anti-Pattern 3: Shared State Between Orchestrator and Members
+
+**What:** Using DynamoDB or S3 as a shared scratchpad between orchestrator and team member agents during execution.
+
+**Why bad:** Breaks durable execution's replay safety. If the shared state is modified during replay, members see stale or inconsistent data. Adds hidden dependencies between independent executions.
+
+**Instead:** Pass context as part of the `AgentRequest.messages` when invoking members. All state flows through the durable execution's checkpoint mechanism.
+
+### Anti-Pattern 4: Direct DynamoDB Access from pmcp-run UI to AgentRegistry
+
+**What:** Having the pmcp-run UI read/write directly to the AgentRegistry DynamoDB table that the Lambda uses.
+
+**Why bad:** The AgentRegistry table has a simple flat schema optimized for Lambda's GetItem. The pmcp-run UI needs rich queries (list by organization, filter by status, pagination). Two different access patterns on the same table creates contention and index bloat.
+
+**Instead:** Two-table design. pmcp-run has its own `AgentConfig` model (AppSync/DynamoDB) for CRUD. Deploy action writes a flattened copy to AgentRegistry for the Lambda.
+
+---
+
+## Scalability Considerations
+
+| Concern | 1 Agent | 10 Agents | 100+ Agents |
+|---------|---------|-----------|-------------|
+| Lambda concurrency | 1 concurrent execution per active agent | 10 concurrent | Request limit increase; each agent is independent |
+| AgentRegistry reads | 1 GetItem per execution (cached by step) | 10 total | Use DAX if needed; reads are by PK, very fast |
+| Channel interactions | Rare (few approvals per run) | ~10 pending callbacks at peak | Callback Relay Lambda scales automatically |
+| Team invocations | N/A | 2-5 member calls per orchestrator run | ctx.invoke() creates independent executions; scales linearly |
+| Checkpoint storage | ~225KB per 10-iteration run | Independent per execution | No cross-execution contention |
+| pmcp-run API load | Minimal (config reads) | ~100 API calls/hour for monitoring | AppSync scales; DynamoDB on-demand |
+| Callback Relay | Single Lambda, rarely invoked | Handles all agents' callbacks | API Gateway + Lambda scales to thousands/sec |
+
+---
+
+## Suggested Build Order
+
+Based on component dependencies, the v2.0 features should be built in this order:
+
+```
+Phase 6: Generic Agent Binary
+  - Make agent binary fully config-driven (remove hardcoded assumptions)
+  - Add agent_type field to AgentConfig
+  - Refactor handler to support extension points (channel tools, team tools)
+  Dependencies: v1.0 complete (confirmed)
+  Risk: Low -- refactoring existing working code
+
+Phase 7: Channels Foundation
+  - ChannelAdapter trait
+  - Channel Router (resolve name -> adapter)
+  - Channel tool injection during tool discovery
+  - LambdaCallbackAdapter (programmatic, for testing)
+  - CallbackConfig integration with wait_for_callback()
+  - Unit tests with mock callback
+  Dependencies: Phase 6 (extension points in handler)
+  Risk: Medium -- wait_for_callback() integration needs validation
+
+Phase 8: Channel Adapters + Callback Relay
+  - SlackAdapter (chat.postMessage + interaction payload format)
+  - Callback Relay Lambda + API Gateway (SAM resources)
+  - DiscordAdapter
+  - WebhookAdapter
+  - End-to-end test: agent sends Slack message, user responds, agent resumes
+  Dependencies: Phase 7 (ChannelAdapter trait)
+  Risk: Medium -- external API integration, webhook setup
+
+Phase 9: Agent Teams
+  - TeamConfig parsing from AgentRegistry
+  - Team member tool generation
+  - ctx.invoke() integration for member calls
+  - Shared context formatting
+  - Test: orchestrator delegates to two members
+  Dependencies: Phase 6 (generic agent binary -- members are the same Lambda)
+  Risk: Medium -- ctx.invoke() behavior with durable execution needs validation
+
+Phase 10: pmcp-run Agents Tab
+  - AgentConfig + AgentExecution models in AppSync schema
+  - Agent CRUD pages (list, create, edit, detail)
+  - MCP server picker (reuse existing McpServer records)
+  - Deploy action (write to AgentRegistry)
+  - Execution history page
+  Dependencies: Phases 6-9 (agent features to manage), pmcp-run codebase
+  Risk: Low -- standard Amplify CRUD, follows existing patterns
+
+Phase 11: PMCP SDK Example
+  - Task-capable MCP server example
+  - Durable client example using call_tool_with_task + wait_for_condition
+  - Documentation
+  Dependencies: pmcp crate Task API (verified exists in source)
+  Risk: Low -- example code, not production infrastructure
+```
+
+**Critical path:** Phase 6 -> Phase 7 -> Phase 8 (channels) and Phase 6 -> Phase 9 (teams) can run in parallel after Phase 6. Phase 10 can start after Phase 6 for basic UI, but needs Phase 7-9 for channel and team config editing. Phase 11 is independent.
+
+**Parallelizable:** Phases 7 and 9 after Phase 6 is complete. Phase 11 is fully independent.
+
+---
 
 ## Sources
 
-- SDK architecture: `ARCHITECTURE.md` in this repo (HIGH confidence)
-- Execution lifecycle: `src/runtime/handler/execute.rs` (HIGH confidence)
-- Step replay mechanism: `src/context/durable_context/step/replay.rs` (HIGH confidence)
-- Step execution flow: `src/context/durable_context/step/execute.rs` (HIGH confidence)
-- Map pattern: `src/context/durable_context/map.rs`, `examples/src/bin/map_operations/main.rs` (HIGH confidence)
-- Parallel pattern: `examples/src/bin/parallel/main.rs` (HIGH confidence)
-- Checkpoint limits: `src/checkpoint/manager.rs` (750KB batch, 256KB per-op) (HIGH confidence)
-- SAM deployment pattern: `examples/template.yaml` (HIGH confidence)
-- Anthropic Messages API format: training data (MEDIUM confidence -- API is stable and well-known, but verify exact field names against current docs when implementing)
-- MCP protocol tool schema format: training data (MEDIUM confidence -- JSON Schema-based `inputSchema` is core MCP spec, but verify pmcp v2.0.0 Client API when implementing)
-- pmcp crate API (`Client`, `HttpTransport`, `list_tools`, `call_tool`): PROJECT.md description (LOW confidence -- could not read pmcp source directly; verify API when integrating)
+### Primary (HIGH confidence)
+- Durable Execution SDK source: `src/context/durable_context/callback.rs`, `callback/execute.rs` -- wait_for_callback() API, CallbackHandle, submitter pattern (read directly)
+- Agent binary source: `examples/src/bin/mcp_agent/` -- handler.rs, config/, mcp/, llm/, types.rs (read directly)
+- SAM template: `examples/template-agent.yaml` -- deployment pattern (read directly)
+- ZeroClaw channels: `~/projects/LocalAgent/zeroclaw/src/channels/traits.rs`, `activity.rs`, `slack.rs` -- Channel trait, adapter patterns (read directly)
+- pmcp-run schema: `~/Development/mcp/sdk/pmcp-run/amplify/data/resource.ts` -- existing data model, McpServer, Organization, Deployment (read directly)
+- Step Functions Agent registry: `~/projects/step-functions-agent/ui_amplify/amplify/data/resource.ts` -- Agent, MCPServer, LLMModel custom types (read directly)
+- PMCP SDK client: `~/Development/mcp/sdk/rust-mcp-sdk/src/client/mod.rs` -- Client struct, ToolCallResponse enum, Task API surface (read directly)
+- [SendDurableExecutionCallbackSuccess API](https://docs.aws.amazon.com/lambda/latest/api/API_SendDurableExecutionCallbackSuccess.html) -- POST /2025-12-01/durable-execution-callbacks/{CallbackId}/succeed, 256KB result limit
+
+### Secondary (MEDIUM confidence)
+- [AWS Lambda Durable Functions docs](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html) -- callback lifecycle, execution model
+- [AWS blog: Build multi-step applications with durable functions](https://aws.amazon.com/blogs/aws/build-multi-step-applications-and-ai-workflows-with-aws-lambda-durable-functions/) -- architecture patterns
+- [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25) -- Tasks primitive definition
+- pmcp-run architecture: `~/Development/mcp/sdk/pmcp-run/ARCHITECTURE.md` -- multi-tenant strategy, deployment pipeline
+
+### Tertiary (LOW confidence)
+- [MCP Tasks blog](https://workos.com/blog/mcp-async-tasks-ai-agent-workflows) -- Tasks lifecycle and polling patterns (experimental feature)
+- [2026 MCP Roadmap](http://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/) -- Tasks stability and future direction
+- ctx.invoke() behavior with same-Lambda invocation -- not tested in existing examples; needs validation
+- Callback Relay Lambda interaction with Slack/Discord webhook formats -- inferred from zeroclaw patterns, not validated

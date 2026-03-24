@@ -1,177 +1,282 @@
 # Feature Landscape
 
-**Domain:** AI Agent Orchestration (Durable Lambda MCP Agent)
-**Researched:** 2026-03-23
-**Confidence:** MEDIUM (training data for ecosystem patterns, HIGH for SDK constraints from codebase)
+**Domain:** AI Agent Platform Integration (Channels, Agent Teams, Platform UI, SDK Example)
+**Researched:** 2026-03-24
+**Confidence:** MEDIUM-HIGH (codebase analysis HIGH, ecosystem patterns MEDIUM, MCP Tasks spec HIGH from official docs)
+
+## Context
+
+This is a SUBSEQUENT MILESTONE feature map. The v1 durable agent (LLM client, MCP integration, agent loop, observability, deployment) is COMPLETE. This document covers the v2 integration features: channels, agent teams, pmcp-run Agents tab, and PMCP SDK example. Features reference existing working implementations in zeroclaw (channels), step-functions-agent (UI), and pmcp/pmcp-tasks (MCP Tasks).
 
 ## Table Stakes
 
-Features users expect. Missing = agent is non-functional or unreliable.
+Features that must exist for each capability area to be functional. Without these, the feature area is incomplete.
 
-### Agent Loop Core
+### Channels: Core Abstraction
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **Agentic loop (LLM call -> tool calls -> repeat)** | Fundamental agent pattern. Without this there is no agent. | Medium | Each LLM call is a `ctx.step()`. Loop continues until LLM returns `end_turn` / no tool_use blocks. Must handle Anthropic's content block array format (text + tool_use interleaved). |
-| **Max iterations guard** | Prevents infinite loops and runaway costs. Every production agent system has this. | Low | Simple counter per loop. AgentRegistry already has `max_iterations` field. Return error or graceful summary when exceeded. |
-| **Tool schema translation (MCP -> Claude API)** | Agent cannot call tools without correct schema format. MCP tool schemas use JSON Schema; Claude API expects `input_schema` on tool definitions. | Medium | MCP `Tool` has `name`, `description`, `inputSchema`. Claude API tool format needs `name`, `description`, `input_schema`. Mostly structural mapping, but edge cases around JSON Schema features (anyOf, $ref) need testing. |
-| **Tool result formatting** | LLM needs tool results in the expected message format to continue reasoning. | Low | MCP `call_tool()` returns `CallToolResult` with `content` (text/image/resource). Must map to Anthropic `tool_result` content blocks. Text content is straightforward; image/resource content needs a serialization strategy. |
-| **MCP server connection and tool discovery** | Agent must connect to configured MCP servers and discover available tools before first LLM call. | Medium | Use `pmcp` Client with HttpTransport. Connect -> initialize -> list_tools() for each configured server. Must handle multiple servers (merge tool lists, handle name collisions). Connection is NOT a durable step -- it's ephemeral per Lambda invocation since MCP connections are stateful and cannot be serialized. |
-| **AgentRegistry config loading** | Agent must read its configuration (instructions, model, MCP endpoints, parameters) from DynamoDB. | Low | Single DynamoDB GetItem. Straightforward with AWS SDK for Rust. Should be a `ctx.step()` so config is cached on replay. |
-| **LLM API call with retry** | Anthropic API calls can fail transiently (429 rate limits, 529 overloaded). Must retry. | Low | Use `ctx.step()` with `ExponentialBackoff` retry strategy. The durable SDK handles retry logic already. Map Anthropic HTTP errors to retryable vs non-retryable. |
-| **Message history assembly** | Each LLM call needs the full conversation history (system prompt + user messages + assistant responses + tool results). | Medium | Must accumulate messages across loop iterations. The message array is the core state of the agent. Each entry is a `ctx.step()` result that gets replayed, so message history rebuilds naturally during replay. |
-| **Deterministic handler design** | Durable execution replays the handler from scratch. Non-deterministic code (random, timestamps, network calls outside `step()`) breaks replay. | Low | Architecture constraint, not a feature to build. All side effects inside `ctx.step()`. MCP connections are re-established each invocation (not checkpointed). Random values for jitter etc. belong inside steps. |
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Channel trait with send/receive** | Fundamental abstraction. zeroclaw proves this pattern with 12 implementations. Without a trait, every channel is bespoke code. Must support `send(message, recipient)` and async `listen(sender)`. | Low | None -- pure trait definition |
+| **Channel registry (name-to-channel map)** | Agent needs to address channels by name ("slack", "discord", "approval"). zeroclaw uses `HashMap<String, Arc<dyn Channel>>` for this. | Low | Channel trait |
+| **Slack channel implementation** | Most common enterprise communication channel. Step Functions agent already uses it for approvals. Direct REST API (chat.postMessage, conversations.history) -- no SDK needed. | Medium | Channel trait, Secrets Manager for bot token |
+| **Webhook channel (inbound/outbound)** | Generic HTTP callback mechanism. Needed for: approval callbacks, external system notifications, inter-service communication. Maps naturally to `wait_for_callback()` -- the callback URL IS the webhook endpoint. | Medium | Channel trait, API Gateway or Lambda URL |
+| **Durable channel send via ctx.step()** | Channel sends must be checkpointed so they are not re-sent on replay. A `ctx.step("send-slack-approval", ...)` ensures idempotent delivery. Without this, replays cause duplicate messages. | Low | Channel trait, existing durable primitives |
+| **Durable channel receive via wait_for_callback()** | Receiving from a channel (approval response, task result, human input) maps directly to `wait_for_callback()`. The callback ID becomes the channel correlation ID. This is the key architectural insight -- channels are callbacks with names. | Medium | Channel trait, existing callback primitives |
+| **Channel config in AgentRegistry** | Agent needs to know which channels are available and their credentials. Additive field `channels: [{type, name, config}]` in the existing DynamoDB schema. | Low | AgentConfig extension |
+| **Deny-by-default security model** | zeroclaw enforces this: empty `allowed_users` means deny everyone. Critical for org-deployed agents where channels face external users. Autonomy levels (ReadOnly, Supervised, Full) per channel. | Medium | Channel trait, SecurityPolicy type |
 
-### Error Handling
+### Channels: Approval Flow
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **LLM error classification** | Must distinguish retryable (rate limit, server error) from non-retryable (invalid request, auth failure) errors to use SDK retry correctly. | Low | Anthropic returns HTTP status codes: 429 = rate limited (retryable), 529 = overloaded (retryable), 400 = bad request (not retryable), 401 = auth (not retryable). Map to step error patterns. |
-| **MCP tool call error handling** | Tools can fail. LLM expects `tool_result` with `is_error: true` so it can reason about the failure and try alternatives. | Low | MCP `call_tool()` returns `CallToolResult` with `isError` flag. Pass error content back to LLM as tool_result with error flag. Do NOT fail the agent -- let the LLM decide how to recover. |
-| **Graceful agent failure** | If the agent truly cannot continue (all retries exhausted, non-recoverable error), it should return a structured error, not crash opaquely. | Low | Catch `DurableError` variants, return structured JSON with error classification, last known state, and iteration count. |
-| **MCP connection failure handling** | MCP servers may be down or unreachable. Agent should fail early with clear error rather than calling LLM with zero tools. | Low | Validate that at least one MCP server connected successfully and at least one tool was discovered. Fail fast with clear error message otherwise. |
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Tool approval gate** | Core use case: agent encounters a "dangerous" tool (delete, payment, deploy), pauses, sends approval request via channel, waits for response. Without this, agents cannot be trusted with destructive operations. | Medium | Channel send/receive, tool tagging |
+| **Tool danger classification** | Agent config must tag tools as requiring approval. Simple allowlist/denylist in AgentRegistry: `approval_required_tools: ["deploy__*", "db__delete"]`. Wildcard matching by prefix. | Low | AgentConfig extension |
+| **Approval timeout with default-deny** | If no human responds within timeout, default to DENY. Prevents agents from blocking indefinitely. Uses `CallbackConfig::with_timeout()` already available in the SDK. | Low | wait_for_callback timeout (exists) |
+| **Approval response with modification** | Approver should be able to modify tool arguments before approving (e.g., change target environment from prod to staging). Step Functions agent already has this in ApprovalDashboard.tsx (`modifiedInput` state). | Medium | Approval flow, channel message format |
 
-### Configuration
+### Agent Teams: Orchestration
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **System prompt from AgentRegistry** | The system prompt defines agent behavior. Must be configurable per agent, not hardcoded. | Low | Read `system_prompt` / `instructions` field from AgentRegistry. Pass as `system` parameter in Anthropic API call. |
-| **Model selection from AgentRegistry** | Different agents need different models (Sonnet for fast/cheap, Opus for complex reasoning). | Low | Read `llm_model` field. Pass to Anthropic API. Initially just claude-sonnet-4-20250514 and claude-opus-4-20250514. |
-| **Temperature and max_tokens from config** | Standard LLM parameters that affect agent behavior. Must be configurable. | Low | Read from AgentRegistry `parameters` map. Pass to Anthropic API request. |
-| **MCP server endpoints from config** | Agent must know which MCP servers to connect to. This is the replacement for the DynamoDB Tool Registry. | Low | New field in AgentRegistry: `mcp_servers` array of `{url, name?, auth?}` objects. Additive schema change. |
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Agent-as-MCP-tool wrapping** | Each team member agent is exposed as an MCP tool to the orchestrator. The tool's `inputSchema` is the agent's task description format. The tool's execution invokes the agent Lambda. This is the fundamental Agent Teams pattern. | High | Existing agent binary, Lambda invoke |
+| **Dynamic MCP server generation** | Given a list of team member agents, generate an in-process MCP server (or tool list) that exposes each as a callable tool. No need for a real MCP server deployment -- just generate the tool definitions and route calls to Lambda invocations. | High | Agent-as-tool wrapping, MCP tool schema |
+| **Sequential team execution via ctx.step()** | Orchestrator calls agents one at a time, passing context forward. Each agent call is a durable step. Natural fit for pipeline patterns (research -> draft -> review -> publish). | Medium | Agent-as-tool, ctx.step() |
+| **Parallel team execution via ctx.parallel/map** | Orchestrator calls multiple agents simultaneously. Natural fit for fan-out patterns (analyze data from 5 different perspectives). Uses existing `ctx.map()` with agent tools. | Medium | Agent-as-tool, ctx.map() |
+| **Shared context via MCP resources** | Team members need shared state (research findings, intermediate results). MCP resources are the right abstraction -- a shared resource server that team members can read/write. | High | MCP resource protocol, shared state store |
+| **Model tiering for cost optimization** | Orchestrator uses a capable model (Opus) for planning and routing; worker agents use cheaper models (Sonnet, Haiku) for execution. Already supported by per-agent model config in AgentRegistry. | Low | AgentRegistry per-agent config (exists) |
+
+### pmcp-run Agents Tab: CRUD
+
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Agent list view** | Display all registered agents with name, status, model, MCP servers, last execution. Step Functions agent has this in Registries.tsx. Must use LCARS design system. | Medium | AgentRegistry API, LCARS components |
+| **Agent create/edit form** | Form fields: name, instructions (system prompt), model selection, temperature, max_tokens, max_iterations, MCP server selection, channel config. Step Functions has AgentDetailsModal. | Medium | AgentRegistry write API, model registry |
+| **Agent delete with confirmation** | Delete agent config from registry. Confirm dialog. Does not delete execution history (separate concern). | Low | AgentRegistry delete API |
+| **Model registry/selector** | Dropdown of available models with provider, pricing, capabilities (tool support, vision). Step Functions has ModelCosts.tsx with full CRUD. | Medium | LLM Models DynamoDB table (migrate from Step Functions) |
+| **MCP server selector** | Select from pmcp-run's existing registry of deployed MCP servers. Multi-select with endpoint URLs auto-populated. | Low | pmcp-run registry API (exists) |
+| **API key management** | Manage API keys for LLM providers (Anthropic, OpenAI) via Secrets Manager. Step Functions has this in ModelCosts.tsx with PasswordField. | Medium | Secrets Manager API, per-provider key storage |
+
+### pmcp-run Agents Tab: Execution
+
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **On-demand agent execution** | "Run Now" button with input textarea. Invokes the Durable Lambda with agent_name and user message. Step Functions has AgentExecution.tsx with agent selector and input. | Medium | Lambda invoke API, agent config |
+| **Execution status tracking** | Show running/completed/failed status with real-time updates. Poll the durable execution checkpoint API or use DynamoDB streams. Step Functions uses Step Functions execution history API. | Medium | Execution tracking backend |
+| **Execution history list** | Paginated list of past executions with status badges, duration, agent name, date. Step Functions has History.tsx with cursor-based pagination. | Medium | Execution history DynamoDB table |
+| **Execution detail view** | View full conversation history (user messages, assistant responses, tool calls, tool results) for a completed execution. Step Functions has ExecutionDetail.tsx with MessageRenderer. | Medium | Execution history data, message rendering |
+
+### PMCP SDK Example
+
+| Feature | Why Expected | Complexity | Dependencies |
+|---------|--------------|------------|--------------|
+| **Durable agent as MCP server example** | The agent exposed as an MCP server tool with TaskSupport::Required. Client calls `tools/call` with `task` field, gets `CreateTaskResult`, polls `tasks/get`, retrieves result via `tasks/result`. Demonstrates the full MCP Tasks lifecycle. | High | pmcp-tasks crate, durable agent binary |
+| **Task status mapping** | Map durable execution states to MCP Task states: running->working, completed->completed, failed->failed, waiting_for_callback->input_required. | Medium | MCP Tasks types, durable execution states |
+| **Progress reporting** | Report iteration progress (iteration 3/10, tools called, tokens used) via MCP progress notifications during task execution. | Medium | MCP progress protocol, agent metadata |
 
 ## Differentiators
 
-Features that set this apart from the Step Functions agent pattern. Not expected for PoC, but highly valuable.
+Features that set this platform apart. Not required for functionality but provide significant value.
 
-### Durable Execution Advantages
+### Channels: Advanced
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Parallel tool execution via `ctx.map()`** | When LLM returns multiple tool_use blocks in a single response, execute them concurrently. Step Functions does this with a Map state, but here it is one line of code: `ctx.map(tool_calls, execute_tool, config)`. Significantly faster for multi-tool turns. | Low | Natural fit -- LLM returns Vec<ToolUse>, map over them. Each tool call is a durable child operation. Concurrency bounded by `MapConfig::with_max_concurrency()`. If any tool call fails, others still complete (graceful degradation). |
-| **Checkpoint-based conversation durability** | If Lambda is suspended mid-conversation (timeout, memory, checkpoint), it resumes exactly where it left off. No conversation state lost. Step Functions achieves this with explicit state passing between states; durable execution gets it for free. | Free | Already provided by the SDK. Each `ctx.step()` result is cached. On replay, all previous LLM calls and tool results are returned from cache. No explicit state management code needed. |
-| **Cost efficiency via suspension** | Lambda suspends (no compute cost) during `ctx.wait()` or between retries. Step Functions charges per state transition. A 10-iteration agent loop with retries could cost significantly less. | Free | Inherent to durable execution. Wait periods and retry backoffs use `ctx.wait()` which suspends the Lambda. |
-| **Single-function deployment** | One Lambda function, one SAM resource. Step Functions agents require: state machine definition, multiple Lambda functions (router, tool executor, response formatter), IAM roles for each. | Free | Architecture advantage. One `sam deploy` vs complex CloudFormation. |
-| **Structured iteration logging** | Each durable step gets a name and is tracked in the checkpoint history. The execution trace IS the agent's reasoning log. No separate logging infrastructure needed for observability. | Low | Name each step meaningfully: `"llm-call-1"`, `"tool-weather-api"`, `"llm-call-2"`. The checkpoint history becomes a structured trace. Can be queried via AWS APIs. |
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Discord channel** | Second most popular developer/community channel. WebSocket-based (Gateway API) for real-time messages. zeroclaw has full implementation with typing indicators and message splitting. | Medium | Channel trait, Discord bot token |
+| **WhatsApp channel** | Enterprise messaging for non-technical approvers. Uses WhatsApp Business API (cloud-hosted). zeroclaw has implementation. | Medium | Channel trait, WhatsApp Business API setup |
+| **Local agent channel** | Enables a local agent (zeroclaw running on developer's machine) to receive tasks from cloud agents and respond. The bridge between local and cloud agents. Uses webhook/SSE transport. | High | Channel trait, bidirectional transport |
+| **Inter-agent channel** | Agent A sends a message to Agent B via named channel, not as a tool call. Useful for advisory patterns where one agent consults another without full orchestration overhead. | Medium | Channel trait, agent-to-agent routing |
+| **Channel message routing with typing indicators** | Show "agent is thinking..." in Slack/Discord while the agent processes. zeroclaw has `start_typing`/`stop_typing` trait methods. Small but significant UX improvement. | Low | Channel trait (already has methods) |
+| **Supervised channel listener with auto-restart** | zeroclaw's `spawn_supervised_listener` pattern: exponential backoff, health marking, restart counting. Critical for production channels that may disconnect. | Low | Channel trait, tokio spawned tasks |
+| **Multi-channel broadcast** | Send the same message to multiple channels simultaneously (e.g., send approval request to both Slack and email). Simple fan-out over channel registry. | Low | Channel registry |
 
-### Context Window Management
+### Agent Teams: Advanced
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Token counting per LLM call** | Track input/output tokens from Anthropic `usage` response field. Essential for cost tracking and context window awareness. | Low | Anthropic returns `usage: { input_tokens, output_tokens }` on every response. Store in agent state. Accumulate across iterations. Include in final response metadata. |
-| **Context window overflow detection** | Detect when message history approaches model context limit before the LLM call fails with a 400 error. | Medium | Track cumulative tokens. Compare against model limits (200K for Sonnet/Opus). When approaching limit (~90%), agent can: (a) return what it has, (b) summarize conversation, or (c) truncate early messages. For PoC, option (a) is sufficient. |
-| **Conversation summarization on overflow** | When context window fills up, summarize early conversation history to reclaim token budget. This is what makes long-running agents viable. | High | Requires an extra LLM call to summarize, then replace early messages with summary. Complex because: must preserve tool call/result pairing integrity, system prompt must stay, recent messages more important than old ones. Defer past PoC. |
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Hierarchical team topology** | Orchestrator decomposes task, assigns sub-tasks to specialized agents, synthesizes results. The proven enterprise pattern per industry research: planner uses capable model, workers use cheap models. | Medium | Agent-as-tool, sequential/parallel execution |
+| **Pipeline pattern** | Agent output feeds directly into next agent's input. `ctx.step("agent-a") -> ctx.step("agent-b") -> ctx.step("agent-c")`. Natural for content workflows. | Low | Sequential execution (just code pattern) |
+| **Agent handoff (explicit transfer)** | OpenAI Agents SDK pattern: agent decides which other agent should continue. Maps to a tool_use where the tool is another agent, and the loop continues in the new agent's context. | High | Agent-as-tool, context transfer |
+| **Team-level cost budget** | Total cost limit across all team members. Orchestrator tracks cumulative token usage and stops when budget exceeded. Uses existing per-agent token tracking. | Medium | Token tracking (exists), budget config |
+| **Consensus/voting pattern** | Multiple agents analyze the same input independently, orchestrator aggregates results. Good for accuracy-critical decisions. Uses `ctx.map()` for parallel execution. | Medium | Parallel execution, result aggregation logic |
 
-### Observability
+### pmcp-run Agents Tab: Advanced
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Iteration metadata in response** | Return structured metadata alongside the final answer: iteration count, total tokens used, tools called, time elapsed. Makes agent behavior transparent. | Low | Accumulate metrics during agent loop. Return as part of the durable execution result alongside the LLM's final text response. |
-| **Per-step structured logging** | Use the SDK's `step_ctx.info()` / `step_ctx.warn()` for structured logs within each durable step. Logs are tied to specific operations. | Low | SDK already provides `DurableLogData` with operation context. Use consistently for LLM calls ("Calling claude-sonnet-4-20250514, 3847 input tokens"), tool calls ("Executing tool weather-api"), and decisions ("Max iterations reached"). |
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Scheduled agent execution (cron)** | Run agents on schedule: "summarize Slack every morning at 9am", "check system health every hour". Uses EventBridge Scheduler to invoke Lambda. | Medium | EventBridge Scheduler, Lambda trigger |
+| **Triggered agent execution (event-driven)** | Run agent when event occurs: new S3 object, DynamoDB stream, SNS notification. Already supported by Lambda event source mappings. | Medium | Lambda event source mappings |
+| **Metrics dashboard with cost tracking** | Charts showing: cost over time (by model, by agent), token usage trends, execution counts, success rates, latency percentiles. Step Functions has Metrics.tsx with Recharts. | High | Metrics DynamoDB table, aggregation logic |
+| **Approval dashboard** | Centralized view of pending approvals across all agents. Step Functions has ApprovalDashboard.tsx with polling. Replaces Activity-based polling with channel-based approach. | Medium | Channels (approval flow), pending approvals query |
+| **Test prompt library** | Save and reuse test prompts per agent. Step Functions has this in AgentExecution.tsx (`TestPrompt` type with save/load). Speeds up agent development iteration. | Low | Test prompts DynamoDB table |
+| **Agent version management** | Multiple versions per agent with promotion (draft -> active -> archived). DynamoDB sort key is already `version`. | Medium | AgentRegistry version field (exists), UI workflow |
+| **Live execution streaming** | Show agent thinking in real-time: LLM responses streaming, tool calls executing. Requires WebSocket or SSE from Lambda to UI. | High | WebSocket API Gateway or polling, streaming support |
 
-### Safety
+### PMCP SDK Example: Advanced
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Tool call validation** | Validate tool call arguments against schema before sending to MCP server. Catch malformed LLM outputs before they cause MCP errors. | Medium | JSON Schema validation of tool arguments against the schema returned by `list_tools()`. Prevents garbage-in to tool servers. If validation fails, return error to LLM as tool_result so it can self-correct. |
-| **Sensitive tool confirmation (future)** | Some tools (delete operations, financial transactions) should require human confirmation. Durable execution's `wait_for_callback()` is purpose-built for this. | Medium | Not needed for PoC, but the architecture supports it naturally. Tag certain tools as requiring confirmation in agent config. When encountered, use `ctx.wait_for_callback()` to pause for human approval. |
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Cancellation support** | Client sends `tasks/cancel`, durable execution receives cancellation signal, terminates gracefully. Maps to durable execution's termination manager. | Medium | MCP Tasks cancel, termination manager |
+| **Input-required flow** | Task moves to `input_required` state when agent needs human input via channel. Client receives elicitation request. Maps durable `wait_for_callback` to MCP Tasks `input_required` status. | High | MCP Tasks input_required, channels |
+| **Multi-tool task server** | MCP server exposing multiple agent configurations as separate tools. Each tool maps to a different agent in the registry. Single server, multiple agent capabilities. | Medium | pmcp server builder, AgentRegistry |
+
+### Migration from Step Functions
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Execution history migration** | Import Step Functions execution history into the new DynamoDB format. Preserves operational continuity. One-time migration script. | Medium | Step Functions API, new history table |
+| **Model costs migration** | Port the LLMModelsRegistry table data. Step Functions has full CRUD for model pricing. Copy table or write migration. | Low | DynamoDB table copy |
+| **MCP server registry migration** | Port MCPServerRegistry data. Step Functions tracks server_id, endpoint_url, available_tools, health_check_url. pmcp-run already has a registry -- reconcile. | Medium | Two registry formats to merge |
 
 ## Anti-Features
 
-Features to explicitly NOT build in the PoC. Scope discipline.
+Features to explicitly NOT build. Scope traps to avoid.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Multi-provider LLM support** | The existing Rust LLM caller already handles OpenAI/Gemini/Bedrock. Abstracting providers in the PoC adds complexity without validating the core value proposition (durable MCP agent loop). | Build for Anthropic Claude only. Structure code so provider abstraction can be added later (separate transformer module) but do not implement it now. |
-| **Streaming LLM responses** | Streaming adds significant complexity (partial content blocks, incremental tool_use parsing, checkpoint timing). The agent loop needs complete responses to make decisions. | Use batch completion (`/v1/messages` without streaming). Streaming can be added as an optimization later for user-facing scenarios. |
-| **Human-in-the-loop approval flows** | `wait_for_callback()` is available in the SDK, but building the approval UI, webhook infrastructure, and timeout handling is a separate project. | Acknowledge in architecture docs that this is possible. Do not build it. The SDK's callback support means it can be added without architectural changes. |
-| **Conversation persistence / memory across invocations** | Long-term memory (remembering past conversations) requires a separate storage layer and retrieval mechanism. Not needed to validate the core agent loop. | Each agent invocation is stateless across invocations. Conversation history lives only within a single durable execution. If needed later, tool-based memory (MCP server with a memory tool) is the right pattern. |
-| **Agent-to-agent delegation** | Multi-agent systems (one agent delegating to another) are fashionable but add enormous complexity. The SDK's `ctx.invoke()` could enable this, but it is premature. | Single agent per invocation. If multi-agent is needed, each agent is a separate Lambda; orchestration happens at a higher level, not within the agent itself. |
-| **Dynamic tool loading / hot reload** | Reconnecting to MCP servers mid-conversation to pick up new tools. Breaks determinism requirements of durable execution (replay would see different tool sets). | Tool discovery happens once at agent start, before the agentic loop. Tool set is fixed for the duration of one execution. |
-| **Fine-grained cost budgets** | Per-invocation cost limits ("stop after $5 of API calls"). Requires token-to-cost mapping, model pricing tables, real-time tracking. | Use max_iterations as the cost proxy. Token counting provides visibility but not enforcement. Cost budgets can be added later using the token tracking data. |
-| **Prompt caching optimization** | Anthropic supports prompt caching (cache system prompt + early messages to reduce input tokens on subsequent calls). Useful but an optimization, not a core feature. | Structure messages so prompt caching CAN work (system prompt is stable, tool definitions are stable). Do not implement cache control headers or cache hit tracking in PoC. |
-| **Image/file content in tool results** | MCP tools can return image and resource content types. Full support requires base64 encoding, content type negotiation, and LLM multimodal input formatting. | Support text content from MCP tool results only. Log a warning for non-text content. Can be extended later. |
-| **Custom tool result transformations** | Post-processing tool outputs before feeding to LLM (truncation, formatting, extraction). | Pass MCP tool results to LLM as-is (text content). If tool results are too large, that is the MCP server's problem to fix, not the agent's. |
+| **Slack Events API / Socket Mode listener in Lambda** | Lambda cannot maintain persistent WebSocket connections. Slack Socket Mode requires a long-running process. Lambda has a 15-minute max timeout. | Use webhook-based Slack integration (incoming webhooks for send, API calls for receive). For listening, use a separate lightweight service or poll conversations.history. Channels in Lambda are fire-and-forget sends + wait_for_callback receives. |
+| **Real-time bidirectional streaming in Lambda** | Durable Lambda is request-response with checkpointing, not a streaming service. WebSocket state cannot be checkpointed. | Use polling from the UI. Agent writes execution state to DynamoDB; UI polls. MCP Tasks already defines a polling protocol with `pollInterval`. |
+| **Channel listeners running inside Lambda** | Lambda is invocation-based. A "listener" pattern (long-polling Slack, maintaining WebSocket to Discord) does not fit. zeroclaw runs listeners because it is a long-running daemon. | Channels in Lambda are one-directional sends. For receiving, use `wait_for_callback()` with an external trigger (webhook, API Gateway, EventBridge). The channel abstraction in Lambda is simpler than zeroclaw's -- it is about formatted sends and structured receives, not background listeners. |
+| **Full zeroclaw channel runtime port** | zeroclaw's channel runtime includes supervised listeners, memory context injection, script engines, per-message parallelism, auto-save memory. Most of this is irrelevant to a serverless agent. | Port the Channel trait (send + health_check, drop listen), the security model (deny-by-default, allowed_users), and the message format. The runtime supervision and listener management are local-agent concerns. |
+| **Building a custom approval UI from scratch** | Step Functions already has ApprovalDashboard.tsx. pmcp-run has the LCARS design system. Building a third approval UI is wasteful. | Migrate the approval dashboard concept into pmcp-run's LCARS UI. Reuse the patterns (polling, task display, approve/deny/modify) but adapt to channel-based approvals instead of Step Functions Activity polling. |
+| **Agent-to-agent communication via shared DynamoDB** | Tempting to have agents write to a shared DynamoDB table for coordination. Creates coupling, race conditions, and checkpoint size issues. | Use MCP resources for shared state. Each agent reads/writes through the MCP protocol, which provides clean abstraction boundaries. For direct communication, use channels. |
+| **Streaming LLM responses to channels** | Sending partial LLM responses to Slack/Discord as they stream in creates message spam and poor UX. | Wait for complete LLM response, then send as a single message. This is how all production chat agents work. |
+| **Custom orchestration DSL for agent teams** | Tempting to build a configuration language for team topologies (YAML workflow definitions). This recreates Step Functions in disguise. | Agent teams are plain Rust code using ctx.step/map/parallel. The orchestrator agent's system prompt defines the coordination pattern. No DSL needed -- the LLM IS the orchestrator. |
+| **Per-message conversation persistence in channels** | Storing every channel message for cross-invocation memory. Adds storage complexity, privacy concerns, and checkpoint bloat. | Each agent invocation is stateless. Channel context is provided in the initial request. If memory is needed, use an MCP memory server tool. |
+| **Multi-tenant channel isolation in single Lambda** | Trying to handle messages from multiple tenants/orgs in a single Lambda invocation. | One Lambda invocation = one agent execution. Multi-tenancy is at the config level (different AgentRegistry entries per tenant), not at the runtime level. |
 
 ## Feature Dependencies
 
 ```
-AgentRegistry config loading
-  -> MCP server connection and tool discovery (needs endpoint URLs from config)
-  -> Tool schema translation (needs MCP tool list)
-  -> Agent loop core (needs translated tools + system prompt)
-    -> LLM API call with retry (called each iteration)
-    -> Message history assembly (accumulates across iterations)
-    -> Tool result formatting (after each tool call)
-    -> Parallel tool execution (when multiple tool_use blocks returned)
-    -> Max iterations guard (checked each iteration)
-    -> Token counting (after each LLM response)
+Channels Abstraction:
+  Channel trait
+    -> Channel registry
+    -> Slack implementation
+    -> Webhook implementation
+    -> Discord implementation (differentiator)
+  Channel config in AgentRegistry
+    -> Durable channel send (ctx.step)
+    -> Durable channel receive (wait_for_callback)
+      -> Tool approval gate
+        -> Tool danger classification
+        -> Approval timeout (default deny)
+        -> Approval response with modification
+  Deny-by-default security
 
-MCP tool call error handling -> Tool result formatting (errors are a type of result)
-LLM error classification -> LLM API call with retry (determines retry behavior)
-Context window overflow detection -> Token counting (needs cumulative token data)
+Agent Teams:
+  Agent-as-MCP-tool wrapping
+    -> Dynamic MCP server generation
+    -> Sequential execution (ctx.step)
+    -> Parallel execution (ctx.map)
+  Shared context (MCP resources) -- independent track
+  Model tiering -- already exists in config
+
+pmcp-run Agents Tab:
+  Agent list view
+    -> Agent create/edit form
+    -> Agent delete
+  Model registry (migrate from Step Functions)
+    -> Model selector in agent form
+  MCP server selector (use pmcp-run registry)
+  On-demand execution
+    -> Execution status tracking
+    -> Execution history list
+      -> Execution detail view
+  API key management
+
+PMCP SDK Example:
+  Durable agent as MCP server
+    -> Task status mapping
+    -> Progress reporting
+  (depends on: working agent binary, pmcp-tasks crate)
+
+Migration:
+  Model costs migration (independent, do first)
+  Execution history migration (after new history format defined)
+  MCP server registry migration (reconcile with pmcp-run)
 ```
 
 Simplified critical path:
 ```
-Config -> MCP Connect -> Schema Translate -> [LLM Call -> Tool Execute -> Format Result] loop -> Return
+Channel trait + config -> Durable send/receive -> Approval flow
+                                                  |
+Agent-as-tool + team execution -----> Agent Teams
+                                                  |
+Agent CRUD UI + execution UI -------> Agents Tab
+                                                  |
+MCP Tasks integration --------------> SDK Example
 ```
 
 ## MVP Recommendation
 
-### Phase 1: Core Agent Loop (must ship first)
+### Phase 1: Channels Abstraction and Approval Flow
+Build the channel trait, Slack and webhook implementations, durable send/receive, and tool approval gate. This is the highest-value feature because it unlocks human-in-the-loop for production use.
 
-Build in this order, each building on the previous:
+Prioritize:
+1. Channel trait (simplified for Lambda -- send + health_check, no listener)
+2. Channel config in AgentRegistry
+3. Durable channel send via ctx.step()
+4. Durable channel receive via wait_for_callback()
+5. Webhook channel (simplest to implement, most versatile)
+6. Slack channel (highest enterprise value)
+7. Tool danger classification in config
+8. Approval gate in agent loop
 
-1. **Anthropic message types and client** -- foundational types everything else depends on
-2. **AgentRegistry config loading** -- unblocks everything else
-3. **MCP server connection and tool discovery** -- agent needs tools to be useful
-4. **Tool schema translation (MCP -> Claude API)** -- LLM needs tools in its format
-5. **Agent loop with durable steps** -- ties LLM calls and tool execution together
-6. **Max iterations guard** -- safety net
+### Phase 2: pmcp-run Agents Tab (CRUD + Execution)
+Port the management UI from Step Functions into pmcp-run. This gives the platform its control plane.
 
-### Phase 2: Production Hardening
+Prioritize:
+1. Model costs migration (unblocks model selection)
+2. Agent list view (LCARS design)
+3. Agent create/edit form
+4. On-demand execution
+5. Execution history list
+6. Execution detail view
 
-7. **Parallel tool execution via `ctx.map()`** -- performance win, low complexity
-8. **MCP tool call error handling** -- let LLM reason about failures
-9. **LLM error classification** -- better retry behavior
-10. **Graceful agent failure** -- structured error responses
-11. **Token counting per LLM call** -- visibility into costs
+### Phase 3: Agent Teams
+Build agent-as-tool wrapping and team orchestration patterns. Depends on stable single-agent execution.
 
-### Defer to Later Phases
+Prioritize:
+1. Agent-as-MCP-tool wrapping
+2. Sequential team execution
+3. Parallel team execution
+4. Hierarchical orchestration example
 
-- **Context window overflow detection** -- needs token counting first, medium complexity
-- **Conversation summarization on overflow** -- high complexity, not needed for reasonable conversation lengths
-- **Tool call validation** -- nice to have, LLM outputs are usually well-formed for Claude
-- **Iteration metadata in response** -- easy but not blocking
+### Phase 4: PMCP SDK Example
+Build the reference example demonstrating MCP Tasks with the durable agent.
 
-## Checkpoint Budget Analysis
+Prioritize:
+1. Durable agent as MCP server with TaskSupport::Required
+2. Task status mapping (durable state -> MCP Task state)
+3. Progress reporting
+4. Cancellation support
 
-**Critical constraint:** 750KB per checkpoint batch.
+### Defer Indefinitely:
+- **Discord, WhatsApp, Signal channels** -- implement only when there is a concrete user request
+- **Live execution streaming** -- high complexity, low priority given polling works
+- **Agent handoff** -- complex, uncertain value over explicit orchestration
+- **Scheduled/triggered execution** -- can use raw EventBridge without UI initially
 
-Each `ctx.step()` checkpoints its result. For the agent loop, the checkpointed data includes:
-- Agent config (~1-5KB): One-time, small
-- Each LLM response (~2-30KB): Varies by response length. A typical Claude response is 500-2000 tokens = 2-8KB JSON. Tool-heavy responses with long outputs can be 20-30KB.
-- Each tool call result (~1-20KB): Varies wildly by tool. Simple tools return < 1KB. Database queries or web scrapes could return 10-20KB.
+## Checkpoint Budget Analysis (v2 Concerns)
 
-**Budget math for a 10-iteration agent loop:**
-- Config: 5KB
-- 10 LLM calls: 10 x 10KB = 100KB
-- 20 tool calls (2 per iteration avg): 20 x 5KB = 100KB
-- Overhead (names, metadata): ~20KB
-- **Total: ~225KB** -- well within 750KB limit
+The v1 analysis showed ~225KB for a 10-iteration agent loop, well within the 750KB limit. v2 features introduce new checkpoint data:
 
-**When it becomes a problem:**
-- 20+ iterations with verbose tool results
-- Tools returning large payloads (full web pages, large query results)
-- LLM generating very long responses
+- **Channel messages**: Approval requests/responses add ~2-5KB per approval event. Typical agent has 0-3 approvals per execution. Impact: +15KB max. Negligible.
+- **Agent team orchestration**: Each team member agent result is checkpointed. A 5-member team with 10KB results each = 50KB. A 3-level hierarchy with fan-out could reach 150KB. **Needs monitoring but should fit within budget.**
+- **Shared context (MCP resources)**: If stored in checkpoint, could be large. **Should NOT be checkpointed** -- use external storage (DynamoDB/S3) and reference by ID.
 
-**Mitigation (not for PoC):** Custom `Serdes` on step configs to compress large payloads; truncation of tool results before checkpointing; context window summarization reduces both token cost AND checkpoint size.
+**Mitigation**: Truncate large tool results before checkpointing; shared context stored externally; team results summarized before checkpointing to orchestrator.
 
 ## Sources
 
-- Durable Execution SDK codebase: checkpoint limit (750KB), step/map/parallel APIs, retry presets, error types -- directly read from source
-- PROJECT.md: AgentRegistry schema, existing assets, constraints, out-of-scope decisions
-- Anthropic Messages API: tool_use / tool_result content block format, usage field for token counting, HTTP status codes for error classification -- training data (MEDIUM confidence, well-established API)
-- MCP Protocol: Tool schema format, call_tool response structure, HTTP transport -- training data (MEDIUM confidence, protocol is stable post-1.0)
-- Agent orchestration patterns: agentic loop, context window management, multi-tool execution, max iterations -- training data synthesis from LangChain, LangGraph, CrewAI, AutoGen, Claude agent patterns (MEDIUM confidence)
+- `/Users/guy/projects/LocalAgent/zeroclaw/src/channels/` -- Channel trait, 12 implementations, supervised listener pattern, security policy (direct codebase analysis, HIGH confidence)
+- `/Users/guy/projects/step-functions-agent/ui_amplify/src/pages/` -- 14 UI pages: Registries, History, Metrics, ModelCosts, AgentExecution, ExecutionDetail, ApprovalDashboard, MCPServers, Settings, ToolSecrets, Test, ToolTest, MCPTest, Dashboard (direct codebase analysis, HIGH confidence)
+- `/Users/guy/Development/mcp/sdk/pmcp-run/` -- LCARS design system, authenticated routes (dashboard, registry, servers, deployments, settings), Next.js 14 + Amplify Gen 2 (direct codebase analysis, HIGH confidence)
+- `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/crates/pmcp-tasks/` -- MCP Tasks implementation with InMemoryTaskStore, DynamoDB store, Redis store, TaskRouter, security config (direct codebase analysis, HIGH confidence)
+- [MCP Tasks Specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks) -- Task lifecycle, status states, polling, cancellation, input_required flow (official spec, HIGH confidence)
+- [MCP 2026 Roadmap](http://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/) -- Tasks shipped as experimental, lifecycle gaps being addressed (official blog, HIGH confidence)
+- [Multi-agent orchestration patterns 2025-2026](https://www.chanl.ai/blog/multi-agent-orchestration-patterns-production-2026) -- Hierarchical, pipeline, fan-out patterns; model tiering reduces costs 40-60% (industry analysis, MEDIUM confidence)
+- [Human-in-the-loop for AI agents](https://www.permit.io/blog/human-in-the-loop-for-ai-agents-best-practices-frameworks-use-cases-and-demo) -- Approval workflows, channel-based notifications, policy-driven oversight (industry analysis, MEDIUM confidence)
+- [Agent dashboard best practices](https://github.com/builderz-labs/mission-control) -- Agent fleet management, task dispatch, cost tracking patterns (open source reference, MEDIUM confidence)
+- `/Users/guy/Development/mcp/lambda-durable-execution-rust/src/context/durable_context/callback.rs` -- wait_for_callback API, CallbackConfig with timeout, heartbeat timeout (direct codebase analysis, HIGH confidence)
+- `/Users/guy/Development/mcp/lambda-durable-execution-rust/examples/src/bin/mcp_agent/` -- Current agent handler, types, config, handler structure (direct codebase analysis, HIGH confidence)
+- `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/docs/TASKS_WITH_POLLING.md` -- pmcp Tasks integration guide, TypedTool with TaskSupport, requestor-driven detection (direct documentation, HIGH confidence)
