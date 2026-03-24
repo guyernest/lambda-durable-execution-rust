@@ -63,11 +63,11 @@ Plans:
   3. Each loop iteration uses `run_in_child_context` so operation ID counters are isolated and replay is deterministic across suspension/resumption
   4. MCP tool errors (isError: true) are passed back to the LLM as error tool_results rather than failing the agent -- the LLM decides how to recover
   5. When max_iterations from config is exceeded, the agent returns a graceful error response rather than looping indefinitely
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Agent types (request/response/iteration), MCP tool execution, and durable handler with full agent loop
+- [ ] 03-02-PLAN.md — Unit tests for handler helpers and types, full suite verification and cleanup
 
 ### Phase 4: Observability
 **Goal**: Agent tracks and reports token usage, iteration metadata, and per-step structured logs for debugging and cost visibility
@@ -104,6 +104,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. LLM Client | 3/3 | Complete | 2026-03-23 |
 | 2. Configuration and MCP Integration | 0/2 | Planning complete | - |
-| 3. Agent Loop | 0/0 | Not started | - |
+| 3. Agent Loop | 0/2 | Planning complete | - |
 | 4. Observability | 0/0 | Not started | - |
 | 5. Deployment and Validation | 0/0 | Not started | - |
