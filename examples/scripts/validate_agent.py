@@ -191,27 +191,19 @@ def get_execution_result(
     lambda_client: Any,
     durable_execution_arn: str,
 ) -> Any | None:
-    """Extract the final result from a succeeded durable execution's history."""
+    """Extract the final result from a succeeded durable execution."""
     try:
-        history = lambda_client.get_durable_execution_history(
+        resp = lambda_client.get_durable_execution(
             DurableExecutionArn=durable_execution_arn,
-            IncludeExecutionData=True,
         )
+        result = resp.get("Result")
+        if result:
+            try:
+                return json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                return result
     except Exception as e:
-        click.echo(styled(f"      Failed to get history: {e}", fg="red"))
-        return None
-
-    # Walk events looking for ExecutionSucceeded with output data
-    for event in history.get("Events", []):
-        event_type = event.get("EventType", "")
-        if event_type == "ExecutionSucceeded":
-            details = event.get("ExecutionSucceededDetails", {})
-            output_data = details.get("Output")
-            if output_data:
-                try:
-                    return json.loads(output_data)
-                except (json.JSONDecodeError, TypeError):
-                    return output_data
+        click.echo(styled(f"      Failed to get result: {e}", fg="red"))
     return None
 
 
