@@ -1,138 +1,181 @@
-# Requirements: Durable Lambda MCP Agent
+# Requirements: Durable Lambda MCP Agent Platform
 
-**Defined:** 2026-03-23
-**Core Value:** A single Durable Lambda replaces Step Functions orchestration -- the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions.
-
-## v1 Requirements
-
-Requirements for initial release. Each maps to roadmap phases.
-
-### LLM Client (adapted from call_llm_rust)
-
-- [x] **LLM-01**: UnifiedLLMService extracted/adapted from existing call_llm_rust with provider-agnostic request/response types (LLMInvocation, LLMResponse, function_calls, metadata)
-- [x] **LLM-02**: Anthropic transformer (AnthropicTransformer) for Claude models -- request/response mapping including tool_use/tool_result content blocks
-- [x] **LLM-03**: OpenAI transformer (OpenAITransformer) for GPT models -- request/response mapping including function calling format
-- [x] **LLM-04**: Provider config from AgentRegistry (provider_id, model_id, endpoint, auth config) matching existing call_llm_rust ProviderConfig schema
-- [x] **LLM-05**: API key retrieval from AWS Secrets Manager using secret_path and secret_key_name from provider config
-- [x] **LLM-06**: LLM error classification -- retryable (429, 529, 503) vs non-retryable (400, 401) mapped to durable step retry patterns
-- [x] **LLM-07**: Unified function_calls extraction from LLM response regardless of provider (tool_use blocks for Anthropic, tool_calls for OpenAI)
-
-### Configuration
-
-- [x] **CONF-01**: Agent reads configuration from AgentRegistry DynamoDB table by agent_name and version
-- [x] **CONF-02**: Configuration includes system_prompt, llm_model, temperature, max_tokens, max_iterations
-- [x] **CONF-03**: Configuration includes mcp_servers array with endpoint URLs (additive field to existing schema)
-- [x] **CONF-04**: Config loading is a durable `ctx.step()` -- cached on replay
-
-### MCP Integration
-
-- [x] **MCP-01**: Agent connects to configured MCP servers via pmcp HttpTransport and initializes each connection
-- [x] **MCP-02**: Agent discovers tools from each MCP server via `list_tools()` and merges into a unified tool list
-- [x] **MCP-03**: MCP tool schemas translated to Claude API tool format (name, description, input_schema)
-- [x] **MCP-04**: Agent executes tool calls via MCP `call_tool()` with tool results mapped to Anthropic tool_result content blocks
-- [x] **MCP-05**: MCP tool errors (isError: true) passed to LLM as error tool_results -- agent does not fail, LLM decides recovery
-- [x] **MCP-06**: MCP connection failure at startup fails fast with clear error (no calling LLM with zero tools)
-
-### Agent Loop
-
-- [x] **LOOP-01**: Agentic loop: call LLM -> check for tool_use -> execute tools -> append results -> repeat until end_turn
-- [x] **LOOP-02**: Each LLM call is a durable `ctx.step()` with ExponentialBackoff retry for transient failures
-- [x] **LOOP-03**: Tool calls executed in parallel via `ctx.map()` when LLM returns multiple tool_use blocks
-- [x] **LOOP-04**: Each loop iteration uses `run_in_child_context` to isolate operation ID counters for replay determinism
-- [x] **LOOP-05**: Message history assembled incrementally from step results -- rebuilds naturally during replay
-- [x] **LOOP-06**: Max iterations guard from AgentRegistry config -- returns graceful error when exceeded
-- [x] **LOOP-07**: Final LLM response returned as durable execution result
-
-### Observability
-
-- [x] **OBS-01**: Token usage (input_tokens, output_tokens) tracked per LLM call and accumulated across iterations
-- [x] **OBS-02**: Iteration metadata in final response: iteration count, total tokens, tools called, time elapsed
-- [x] **OBS-03**: Per-step structured logging via SDK logger with meaningful step names (e.g., "llm-call-1", "tool-weather-api")
-
-### Deployment
-
-- [x] **DEPL-01**: Agent deployable via SAM template with DurableConfig (nodejs24.x runtime + EXEC_WRAPPER pattern)
-- [x] **DEPL-02**: IAM permissions for DynamoDB (AgentRegistry read), Secrets Manager (API key read), Lambda (checkpoint)
-- [x] **DEPL-03**: End-to-end validation with at least one real MCP server
+**Defined:** 2026-03-24
+**Core Value:** A single Durable Lambda replaces Step Functions orchestration — extended with channels for human/agent interaction, teams for multi-agent coordination, and pmcp.run for unified management.
 
 ## v2 Requirements
 
+Requirements for v2.0 Integration Plan milestone. Each maps to roadmap phases.
+
+### Channels Abstraction
+
+- [ ] **CHAN-01**: Channel trait with deliver() and health_check() methods, adapted for Lambda (no listen())
+- [ ] **CHAN-02**: Channel registry mapping named channels to adapters, configured per-agent in AgentRegistry
+- [ ] **CHAN-03**: Durable channel send via ctx.step() for idempotent delivery on replay
+- [ ] **CHAN-04**: Durable channel receive via wait_for_callback() with callback ID as channel correlation ID
+- [ ] **CHAN-05**: Slack channel adapter using Web API chat.postMessage for outbound delivery
+- [ ] **CHAN-06**: Webhook channel adapter for generic HTTP callback send/receive
+- [ ] **CHAN-07**: Discord channel adapter using REST API for outbound delivery and webhook interactions for inbound
+- [ ] **CHAN-08**: Local agent channel bridging cloud agents to zeroclaw instances via webhook/SSE transport
+- [ ] **CHAN-09**: Webhook Receiver Lambda binary that validates signatures, acknowledges within 3 seconds, and calls SendDurableExecutionCallbackSuccess
+- [ ] **CHAN-10**: Deny-by-default security model — channels explicitly allowed per-agent, no implicit access
+- [ ] **CHAN-11**: Channel configuration schema as additive field in AgentRegistry DynamoDB table
+
+### Approval Flow
+
+- [ ] **APPR-01**: Tool danger classification in agent config with allowlist/denylist patterns (e.g., "deploy__*", "db__delete")
+- [ ] **APPR-02**: Approval gate in agent loop — agent pauses, sends approval request via configured channel, waits for response
+- [ ] **APPR-03**: Approval timeout with default-deny using CallbackConfig::with_timeout()
+- [ ] **APPR-04**: Approval response supports modification of tool arguments before execution
+
+### Agent Teams
+
+- [ ] **TEAM-01**: Agent-as-MCP-tool wrapping — each team member exposed as a callable tool to the orchestrator
+- [ ] **TEAM-02**: Dynamic tool definition generation from team member agent configs at discovery time
+- [ ] **TEAM-03**: Sequential team execution via ctx.step() for pipeline patterns
+- [ ] **TEAM-04**: Parallel team execution via ctx.map() for fan-out patterns
+- [ ] **TEAM-05**: Delegation depth guard with configurable maximum (3-5) passed through AgentRequest
+- [ ] **TEAM-06**: Visited-agent tracking to prevent circular delegation loops
+- [ ] **TEAM-07**: Shared context via S3 Files as MCP resources accessible to all team members
+- [ ] **TEAM-08**: Team configuration schema in AgentRegistry (member agents, orchestrator settings)
+- [ ] **TEAM-09**: Specialist response summarization before checkpointing to stay within 750KB batch limit
+
+### pmcp-run Agents Tab
+
+- [ ] **PMCP-01**: Agent list view in LCARS design system showing name, status, model, MCP servers
+- [ ] **PMCP-02**: Agent create/edit form with instructions, model selection, MCP server selection, channel config, parameters
+- [ ] **PMCP-03**: Agent delete with confirmation
+- [ ] **PMCP-04**: Model registry with provider, pricing, and capabilities (migrated from Step Functions LLMModels table)
+- [ ] **PMCP-05**: MCP server selector populated from pmcp-run's existing server registry
+- [ ] **PMCP-06**: API key management for LLM providers via Secrets Manager
+- [ ] **PMCP-07**: On-demand agent execution from UI with input textarea and agent selector
+- [ ] **PMCP-08**: Execution status tracking with running/completed/failed badges
+- [ ] **PMCP-09**: Execution history list with pagination, status filter, and agent filter
+- [ ] **PMCP-10**: Execution detail view with full conversation history rendering
+- [ ] **PMCP-11**: Metrics dashboard with token usage charts and execution success rates
+- [ ] **PMCP-12**: Cost tracking by model and agent with trend visualization
+
+### PMCP SDK Example
+
+- [ ] **SDK-01**: Durable agent exposed as MCP server with TaskSupport::Required in rust-mcp-sdk examples
+- [ ] **SDK-02**: Task status mapping — durable execution states to MCP Task states (running->working, completed->completed, waiting_for_callback->input_required)
+- [ ] **SDK-03**: Progress reporting via MCP notifications during task execution (iteration count, tokens used)
+
+## v1 Requirements (Complete)
+
+All 30 v1 requirements delivered across 5 phases. See v1 REQUIREMENTS.md for details.
+
+### LLM Client — Complete (Phase 1)
+- [x] **LLM-01** through **LLM-07**: UnifiedLLMService, Anthropic/OpenAI transformers, provider config, Secrets Manager auth, error classification, function_calls extraction
+
+### Configuration — Complete (Phase 2)
+- [x] **CONF-01** through **CONF-04**: AgentRegistry loading, system_prompt/model/params, mcp_servers array, durable ctx.step() caching
+
+### MCP Integration — Complete (Phases 2-3)
+- [x] **MCP-01** through **MCP-06**: Server connection, tool discovery, schema translation, tool execution, error handling, fail-fast
+
+### Agent Loop — Complete (Phase 3)
+- [x] **LOOP-01** through **LOOP-07**: Agentic loop, durable steps with retry, parallel map, child context isolation, message history, max iterations, final response
+
+### Observability — Complete (Phase 4)
+- [x] **OBS-01** through **OBS-03**: Token tracking, iteration metadata, structured logging
+
+### Deployment — Complete (Phase 5)
+- [x] **DEPL-01** through **DEPL-03**: SAM template, IAM permissions, end-to-end validation
+
+## v3 Requirements
+
 Deferred to future release. Tracked but not in current roadmap.
 
-### Context Window Management
+### Additional Channels
+- **CHAN-12**: WhatsApp channel adapter via WhatsApp Business API
+- **CHAN-13**: Signal channel adapter (requires Signal Bridge — no public bot API)
+- **CHAN-14**: Email channel adapter via SES
 
-- **CTX-01**: Context window overflow detection -- track cumulative tokens against model limits
-- **CTX-02**: Conversation summarization on overflow -- extra LLM call to compress early history
-- **CTX-03**: Message truncation strategy preserving tool_use/tool_result pairing integrity
+### Advanced Agent Teams
+- **TEAM-10**: Agent handoff — explicit transfer of control between agents (OpenAI Agents SDK pattern)
+- **TEAM-11**: Team-level cost budget enforcement across all members
+- **TEAM-12**: Consensus/voting pattern — multiple agents analyze independently, orchestrator aggregates
 
-### Safety & Validation
+### pmcp-run Advanced
+- **PMCP-13**: Scheduled agent execution via EventBridge Scheduler with cron/rate-based triggers from UI
+- **PMCP-14**: Triggered agent execution from events (S3, DynamoDB streams, SNS)
+- **PMCP-15**: Approval dashboard — centralized pending approvals view with approve/deny/modify from UI
+- **PMCP-16**: Test prompt library — save and reuse test prompts per agent
+- **PMCP-17**: Agent version management with draft/active/archived promotion
+- **PMCP-18**: Live execution streaming via WebSocket or SSE
 
-- **SAFE-01**: Tool call argument validation against MCP schema before sending to server
-- **SAFE-02**: Sensitive tool confirmation via `wait_for_callback()` for destructive operations
+### PMCP SDK Advanced
+- **SDK-04**: Cancellation support — client sends tasks/cancel, durable execution terminates gracefully
+- **SDK-05**: Input-required flow mapping wait_for_callback to MCP Tasks input_required status
+- **SDK-06**: Multi-tool task server — single MCP server exposing multiple agent configs as separate tools
 
-### Additional Providers
-
-- **PROV-01**: Gemini transformer support
-- **PROV-02**: Bedrock/Nova transformer support
-
-### Advanced Features
-
-- **ADV-01**: Streaming LLM responses
-- **ADV-02**: Non-text MCP tool results (images, resources)
-- **ADV-03**: Agent-to-agent delegation via `ctx.invoke()`
-- **ADV-04**: Prompt caching optimization for Anthropic API
+### Migration
+- **MIG-01**: Model costs migration from Step Functions LLMModelsRegistry to pmcp-run
+- **MIG-02**: Execution history migration from Step Functions to new DynamoDB format
+- **MIG-03**: MCP server registry reconciliation between Step Functions and pmcp-run registries
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| MCP server creation/wrapping | Separate effort -- this project builds the client/agent side only |
-| Admin UI modifications | AgentRegistry schema extension is the interface; UI changes happen in step-functions-agent repo |
-| Conversation persistence across invocations | Each invocation is stateless; long-term memory via MCP memory tool if needed |
-| Dynamic tool loading mid-conversation | Breaks durable execution determinism -- tool set fixed per execution |
-| Fine-grained cost budgets | Use max_iterations as cost proxy; token counting provides visibility |
-| Custom tool result transformations | Pass MCP results as-is; truncation is the MCP server's responsibility |
+| Slack Socket Mode / persistent WebSocket in Lambda | Lambda cannot maintain persistent connections; use webhook-based integration |
+| Channel listeners running inside Lambda | Lambda is invocation-based; use wait_for_callback() with external triggers |
+| Custom orchestration DSL for agent teams | Recreates Step Functions; the LLM IS the orchestrator via plain Rust code |
+| Real-time bidirectional streaming in Lambda | Durable Lambda is request-response with checkpointing; use polling via MCP Tasks |
+| Per-message conversation persistence in channels | Each invocation is stateless; use MCP memory tool if cross-invocation memory needed |
+| Full zeroclaw runtime port | Port the Channel trait + security model only; listener supervision is local-agent concern |
+| Agent-to-agent communication via shared DynamoDB | Use MCP resources (S3 Files) for shared state; DynamoDB creates coupling and race conditions |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LLM-01 | Phase 1 | Complete |
-| LLM-02 | Phase 1 | Complete |
-| LLM-03 | Phase 1 | Complete |
-| LLM-04 | Phase 1 | Complete |
-| LLM-05 | Phase 1 | Complete |
-| LLM-06 | Phase 1 | Complete |
-| LLM-07 | Phase 1 | Complete |
-| CONF-01 | Phase 2 | Complete |
-| CONF-02 | Phase 2 | Complete |
-| CONF-03 | Phase 2 | Complete |
-| CONF-04 | Phase 2 | Complete |
-| MCP-01 | Phase 2 | Complete |
-| MCP-02 | Phase 2 | Complete |
-| MCP-03 | Phase 2 | Complete |
-| MCP-04 | Phase 3 | Complete |
-| MCP-05 | Phase 3 | Complete |
-| MCP-06 | Phase 2 | Complete |
-| LOOP-01 | Phase 3 | Complete |
-| LOOP-02 | Phase 3 | Complete |
-| LOOP-03 | Phase 3 | Complete |
-| LOOP-04 | Phase 3 | Complete |
-| LOOP-05 | Phase 3 | Complete |
-| LOOP-06 | Phase 3 | Complete |
-| LOOP-07 | Phase 3 | Complete |
-| OBS-01 | Phase 4 | Complete |
-| OBS-02 | Phase 4 | Complete |
-| OBS-03 | Phase 4 | Complete |
-| DEPL-01 | Phase 5 | Complete |
-| DEPL-02 | Phase 5 | Complete |
-| DEPL-03 | Phase 5 | Complete |
+| CHAN-01 | TBD | Pending |
+| CHAN-02 | TBD | Pending |
+| CHAN-03 | TBD | Pending |
+| CHAN-04 | TBD | Pending |
+| CHAN-05 | TBD | Pending |
+| CHAN-06 | TBD | Pending |
+| CHAN-07 | TBD | Pending |
+| CHAN-08 | TBD | Pending |
+| CHAN-09 | TBD | Pending |
+| CHAN-10 | TBD | Pending |
+| CHAN-11 | TBD | Pending |
+| APPR-01 | TBD | Pending |
+| APPR-02 | TBD | Pending |
+| APPR-03 | TBD | Pending |
+| APPR-04 | TBD | Pending |
+| TEAM-01 | TBD | Pending |
+| TEAM-02 | TBD | Pending |
+| TEAM-03 | TBD | Pending |
+| TEAM-04 | TBD | Pending |
+| TEAM-05 | TBD | Pending |
+| TEAM-06 | TBD | Pending |
+| TEAM-07 | TBD | Pending |
+| TEAM-08 | TBD | Pending |
+| TEAM-09 | TBD | Pending |
+| PMCP-01 | TBD | Pending |
+| PMCP-02 | TBD | Pending |
+| PMCP-03 | TBD | Pending |
+| PMCP-04 | TBD | Pending |
+| PMCP-05 | TBD | Pending |
+| PMCP-06 | TBD | Pending |
+| PMCP-07 | TBD | Pending |
+| PMCP-08 | TBD | Pending |
+| PMCP-09 | TBD | Pending |
+| PMCP-10 | TBD | Pending |
+| PMCP-11 | TBD | Pending |
+| PMCP-12 | TBD | Pending |
+| SDK-01 | TBD | Pending |
+| SDK-02 | TBD | Pending |
+| SDK-03 | TBD | Pending |
 
 **Coverage:**
-- v1 requirements: 30 total
-- Mapped to phases: 30
-- Unmapped: 0
+- v2 requirements: 39 total
+- Mapped to phases: 0 (pending roadmap creation)
+- Unmapped: 39
 
 ---
-*Requirements defined: 2026-03-23*
-*Last updated: 2026-03-23 after roadmap creation (LOOP-03 moved from Phase 4 to Phase 3)*
+*Requirements defined: 2026-03-24*
+*Last updated: 2026-03-24 after milestone v2.0 definition*
