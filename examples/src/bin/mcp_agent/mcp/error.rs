@@ -3,15 +3,6 @@ use thiserror::Error;
 /// Errors from MCP server connections and tool discovery.
 #[derive(Error, Debug)]
 pub enum McpError {
-    /// Failed to establish a connection to the MCP server.
-    #[error("Failed to connect to MCP server {url}: {reason}")]
-    ConnectionFailed {
-        /// The server URL that failed.
-        url: String,
-        /// The underlying error description.
-        reason: String,
-    },
-
     /// MCP server initialization handshake failed.
     #[error("MCP server initialization failed for {url}: {reason}")]
     InitializationFailed {
@@ -45,4 +36,13 @@ pub enum McpError {
     /// The provided server URL could not be parsed.
     #[error("Invalid server URL: {0}")]
     InvalidUrl(String),
+
+    /// MCP tool execution (`call_tool`) failed at the transport level.
+    #[error("Tool execution failed for {tool}: {reason}")]
+    ToolExecutionFailed {
+        /// The tool name that failed.
+        tool: String,
+        /// The underlying error description.
+        reason: String,
+    },
 }

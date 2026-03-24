@@ -1,10 +1,12 @@
-// Allow dead code until the handler is wired in Phase 3.
+// Allow dead code until the handler is fully wired.
 #[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
 mod llm;
 #[allow(dead_code)]
 mod mcp;
+#[allow(dead_code)]
+mod types;
 
 #[tokio::main]
 async fn main() -> Result<(), lambda_runtime::Error> {

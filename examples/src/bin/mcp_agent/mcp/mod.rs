@@ -2,10 +2,9 @@ pub mod client;
 pub mod error;
 pub mod types;
 
-// Re-exports consumed by the agent handler (Phase 3). Suppress unused warnings until then.
-#[allow(unused_imports)]
-pub use client::{discover_all_tools, resolve_tool_call};
-#[allow(unused_imports)]
+pub use client::{
+    discover_all_tools, establish_mcp_connections, execute_tool_call, resolve_tool_call,
+    McpClientCache,
+};
 pub use error::McpError;
-#[allow(unused_imports)]
 pub use types::ToolsWithRouting;

@@ -1,13 +1,18 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
-use pmcp::types::ToolInfo;
+use pmcp::types::{Content, ToolInfo};
 use pmcp::{Client, ClientCapabilities, Implementation};
 
-use crate::llm::models::UnifiedTool;
+use crate::llm::models::{FunctionCall, UnifiedTool};
 use crate::llm::transformers::utils::clean_tool_schema;
 use crate::mcp::error::McpError;
 use crate::mcp::types::ToolsWithRouting;
+use crate::types::ToolCallResult;
+
+/// Shared cache of initialized MCP clients, keyed by server URL.
+pub type McpClientCache = Arc<HashMap<String, Client<StreamableHttpTransport>>>;
 
 /// Discover tools from all configured MCP servers.
 ///
@@ -25,13 +30,15 @@ pub async fn discover_all_tools(server_urls: &[String]) -> Result<ToolsWithRouti
     let mut all_tools = Vec::new();
     let mut routing = HashMap::new();
 
-    for url in server_urls {
-        let prefix = extract_host_prefix(url)?;
-        let tools = connect_and_discover(url).await?;
+    for url_str in server_urls {
+        let parsed = url::Url::parse(url_str)
+            .map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
+        let prefix = extract_host_prefix_from(&parsed, url_str)?;
+        let tools = connect_and_discover_parsed(parsed).await?;
 
         for tool_info in &tools {
             let unified = translate_mcp_tool(tool_info, &prefix);
-            routing.insert(unified.name.clone(), url.clone());
+            routing.insert(unified.name.clone(), url_str.clone());
             all_tools.push(unified);
         }
     }
@@ -46,9 +53,8 @@ pub async fn discover_all_tools(server_urls: &[String]) -> Result<ToolsWithRouti
 ///
 /// Uses `StreamableHttpTransport` with TLS (per D-04). Connections are
 /// ephemeral (per D-07) -- only the returned `ToolInfo` list persists.
-async fn connect_and_discover(server_url: &str) -> Result<Vec<ToolInfo>, McpError> {
-    let parsed_url =
-        url::Url::parse(server_url).map_err(|_| McpError::InvalidUrl(server_url.to_string()))?;
+async fn connect_and_discover_parsed(parsed_url: url::Url) -> Result<Vec<ToolInfo>, McpError> {
+    let server_url = parsed_url.as_str().to_string();
 
     let config = StreamableHttpTransportConfig {
         url: parsed_url,
@@ -109,20 +115,17 @@ fn translate_mcp_tool(tool_info: &ToolInfo, prefix: &str) -> UnifiedTool {
     }
 }
 
-/// Extract a short host prefix from a server URL.
+/// Extract a short host prefix from a parsed URL.
 ///
-/// Parses the URL, extracts the hostname, and takes the first segment before
-/// the first dot. For example:
-/// - `"https://calc-server.us-east-1.amazonaws.com/mcp"` -> `"calc-server"`
-/// - `"https://wiki.example.com"` -> `"wiki"`
-/// - `"https://localhost:8080"` -> `"localhost"`
-fn extract_host_prefix(server_url: &str) -> Result<String, McpError> {
-    let parsed =
-        url::Url::parse(server_url).map_err(|_| McpError::InvalidUrl(server_url.to_string()))?;
-
+/// Takes the hostname and returns the first segment before the first dot.
+/// For example:
+/// - `"calc-server.us-east-1.amazonaws.com"` -> `"calc-server"`
+/// - `"wiki.example.com"` -> `"wiki"`
+/// - `"localhost"` -> `"localhost"`
+fn extract_host_prefix_from(parsed: &url::Url, original_url: &str) -> Result<String, McpError> {
     let host = parsed
         .host_str()
-        .ok_or_else(|| McpError::InvalidUrl(server_url.to_string()))?;
+        .ok_or_else(|| McpError::InvalidUrl(original_url.to_string()))?;
 
     let prefix = host.split('.').next().unwrap_or(host);
     Ok(prefix.to_string())
@@ -142,12 +145,103 @@ pub fn resolve_tool_call(
         .get(prefixed_name)
         .ok_or_else(|| McpError::UnknownTool(prefixed_name.to_string()))?;
 
-    let parts: Vec<&str> = prefixed_name.splitn(2, "__").collect();
-    if parts.len() < 2 {
-        return Err(McpError::InvalidToolName(prefixed_name.to_string()));
+    let original_name = prefixed_name
+        .splitn(2, "__")
+        .nth(1)
+        .ok_or_else(|| McpError::InvalidToolName(prefixed_name.to_string()))?;
+
+    Ok((server_url.clone(), original_name.to_string()))
+}
+
+/// Establish persistent MCP client connections to all configured servers.
+///
+/// For each URL: parse, create transport, create client, initialize with
+/// `ClientCapabilities::default()`. The resulting clients are cached in an
+/// `Arc<HashMap>` keyed by the original URL string.
+///
+/// Fails fast with `McpError::InitializationFailed` if any server fails.
+pub async fn establish_mcp_connections(
+    server_urls: &[String],
+) -> Result<McpClientCache, McpError> {
+    let mut clients = HashMap::new();
+
+    for url_str in server_urls {
+        let parsed = url::Url::parse(url_str)
+            .map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
+
+        let config = StreamableHttpTransportConfig {
+            url: parsed,
+            extra_headers: vec![],
+            auth_provider: None,
+            session_id: None,
+            enable_json_response: false,
+            on_resumption_token: None,
+            http_middleware_chain: None,
+        };
+
+        let transport = StreamableHttpTransport::new(config);
+        let mut client =
+            Client::with_info(transport, Implementation::new("durable-mcp-agent", "0.1.0"));
+
+        client
+            .initialize(ClientCapabilities::default())
+            .await
+            .map_err(|e| McpError::InitializationFailed {
+                url: url_str.to_string(),
+                reason: e.to_string(),
+            })?;
+
+        clients.insert(url_str.clone(), client);
     }
 
-    Ok((server_url.clone(), parts[1].to_string()))
+    Ok(Arc::new(clients))
+}
+
+/// Execute a single MCP tool call against the appropriate server.
+///
+/// Resolves the prefixed tool name to a server URL and original name via
+/// the routing map, then calls the tool on the cached MCP client. MCP-level
+/// errors (transport failures) return `McpError::ToolExecutionFailed`. MCP
+/// tool errors (`is_error: true`) are returned as successful `ToolCallResult`
+/// values so the LLM can decide recovery (per D-12, MCP-05).
+pub async fn execute_tool_call(
+    call: &FunctionCall,
+    routing: &HashMap<String, String>,
+    mcp_clients: &McpClientCache,
+) -> Result<ToolCallResult, McpError> {
+    let (server_url, original_name) = resolve_tool_call(&call.name, routing)?;
+
+    let client = mcp_clients.get(&server_url).ok_or_else(|| {
+        McpError::ToolExecutionFailed {
+            tool: call.name.clone(),
+            reason: format!("No cached client for server URL: {server_url}"),
+        }
+    })?;
+
+    let result = client
+        .call_tool(original_name, call.input.clone())
+        .await
+        .map_err(|e| McpError::ToolExecutionFailed {
+            tool: call.name.clone(),
+            reason: e.to_string(),
+        })?;
+
+    // Extract text from Content::Text variants, join with newline
+    let text: String = result
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(ToolCallResult {
+        tool_use_id: call.id.clone(),
+        content: text,
+        is_error: result.is_error,
+    })
 }
 
 #[cfg(test)]
@@ -157,31 +251,29 @@ mod tests {
 
     // ===== extract_host_prefix tests =====
 
+    fn parse_url(s: &str) -> url::Url {
+        url::Url::parse(s).unwrap()
+    }
+
     #[test]
     fn test_extract_host_prefix_standard() {
-        let prefix =
-            extract_host_prefix("https://calc-server.us-east-1.amazonaws.com/mcp").unwrap();
+        let url = "https://calc-server.us-east-1.amazonaws.com/mcp";
+        let prefix = extract_host_prefix_from(&parse_url(url), url).unwrap();
         assert_eq!(prefix, "calc-server");
     }
 
     #[test]
     fn test_extract_host_prefix_simple() {
-        let prefix = extract_host_prefix("https://wiki.example.com").unwrap();
+        let url = "https://wiki.example.com";
+        let prefix = extract_host_prefix_from(&parse_url(url), url).unwrap();
         assert_eq!(prefix, "wiki");
     }
 
     #[test]
     fn test_extract_host_prefix_no_dots() {
-        let prefix = extract_host_prefix("https://localhost:8080").unwrap();
+        let url = "https://localhost:8080";
+        let prefix = extract_host_prefix_from(&parse_url(url), url).unwrap();
         assert_eq!(prefix, "localhost");
-    }
-
-    #[test]
-    fn test_extract_host_prefix_invalid_url() {
-        let result = extract_host_prefix("not a url");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, McpError::InvalidUrl(_)));
     }
 
     // ===== translate_mcp_tool tests =====
