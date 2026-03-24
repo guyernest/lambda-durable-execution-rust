@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Integration Plan
+status: planning
+stopped_at: Phase 6 context gathered
+last_updated: "2026-03-24T21:39:25.420Z"
+last_activity: "2026-03-24 -- Roadmap revised: reordered v2.0 phases (SDK Example -> Agents Tab -> Channels -> Teams)"
+progress:
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 56
+---
+
 # Project State
 
 ## Project Reference
@@ -64,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24
-Stopped at: Roadmap revised for v2.0 (reordered Phases 6-9), ready to plan Phase 6
-Resume file: None
+Last session: 2026-03-24T21:39:25.414Z
+Stopped at: Phase 6 context gathered
+Resume file: .planning/phases/06-pmcp-sdk-example/06-CONTEXT.md
