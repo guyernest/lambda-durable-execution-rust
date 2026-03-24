@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### v2.0 Integration Plan (Phases 6-9)
 
-- [ ] **Phase 6: PMCP SDK Example** - Durable agent exposed as MCP server with MCP Tasks lifecycle, status mapping, and progress reporting
+- [ ] **Phase 6: PMCP SDK Example** - Reference MCP agent example demonstrating LLM + MCP tool loop with Durable Lambda, task-aware tool execution, and progress logging
 - [ ] **Phase 7: pmcp-run Agents Tab** - Agent CRUD UI in LCARS design system, model registry, on-demand execution, execution history, metrics dashboard, and cost tracking
 - [ ] **Phase 8: Channels and Approval Flow** - Channel abstraction with Slack/Discord/webhook adapters, webhook receiver Lambda, durable send/receive, deny-by-default security, and tool approval gates
 - [ ] **Phase 9: Agent Teams** - Agent-as-MCP-tool wrapping, sequential and parallel team execution, delegation depth guard, circular delegation prevention, shared context via S3, and response summarization
@@ -114,14 +114,18 @@ Plans:
 </details>
 
 ### Phase 6: PMCP SDK Example
-**Goal**: The durable agent is packaged as a reference MCP server example that demonstrates MCP Tasks lifecycle integration, proving the platform can be consumed through the standard MCP protocol
+**Goal**: A reference MCP agent example in the PMCP SDK repo demonstrates how to build an LLM + MCP tool loop agent using Durable Lambda, with client-side MCP Tasks handling and progress logging
 **Depends on**: Phase 5 (v1.0 complete)
 **Requirements**: SDK-01, SDK-02, SDK-03
 **Success Criteria** (what must be TRUE):
-  1. A durable agent binary runs as an MCP server with TaskSupport::Required, and an MCP client can submit a task that triggers a full agent execution
-  2. Task status correctly reflects durable execution state -- running maps to working, completed maps to completed, and waiting_for_callback maps to input_required
-  3. During task execution, the MCP server sends progress notifications reporting iteration count and tokens used, which the client can observe in real time
-**Plans**: TBD
+  1. A self-contained example in the PMCP SDK compiles and demonstrates a durable agent that connects to MCP servers, discovers tools, calls the LLM, executes tools, and loops until end_turn
+  2. When a tool returns a Task (long-running), the agent polls via ctx.wait_for_condition() using tasks_get() until the task reaches a terminal status, with Lambda suspending between polls
+  3. Agent execution emits structured tracing logs with iteration count, token usage, and tool names at each iteration
+**Plans**: 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Cargo.toml dev-dependencies and core agent example with LLM + MCP tool loop (SDK-01, SDK-03)
+- [ ] 06-02-PLAN.md — Task-aware tool execution with wait_for_condition polling (SDK-02)
 
 ### Phase 7: pmcp-run Agents Tab
 **Goal**: Users can create, configure, execute, and monitor agents through the pmcp-run web UI without touching DynamoDB, SAM templates, or the command line
@@ -171,7 +175,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9
 | 3. Agent Loop | v1.0 | 2/2 | Complete | 2026-03-23 |
 | 4. Observability | v1.0 | 1/1 | Complete | 2026-03-23 |
 | 5. Deployment and Validation | v1.0 | 1/1 | Complete | 2026-03-23 |
-| 6. PMCP SDK Example | v2.0 | 0/? | Not started | - |
+| 6. PMCP SDK Example | v2.0 | 0/2 | Planned | - |
 | 7. pmcp-run Agents Tab | v2.0 | 0/? | Not started | - |
 | 8. Channels and Approval Flow | v2.0 | 0/? | Not started | - |
 | 9. Agent Teams | v2.0 | 0/? | Not started | - |
