@@ -2,8 +2,8 @@
 phase: 6
 slug: pmcp-sdk-example
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-24
 ---
 
@@ -38,9 +38,9 @@ created: 2026-03-24
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 06-01-01 | 01 | 1 | SDK-01 | compile | `cargo check` | ❌ W0 | ⬜ pending |
-| 06-01-02 | 01 | 1 | SDK-02 | unit | `cargo test test_task_status_mapping` | ❌ W0 | ⬜ pending |
-| 06-01-03 | 01 | 1 | SDK-03 | unit | `cargo test test_progress_reporting` | ❌ W0 | ⬜ pending |
+| 06-01-01 | 01 | 1 | SDK-01 | config | `cd ~/Development/mcp/sdk/rust-mcp-sdk && grep -c '65_durable_mcp_agent' Cargo.toml` | ⬜ | ⬜ pending |
+| 06-01-02 | 01 | 1 | SDK-01, SDK-03 | build | `cd ~/Development/mcp/sdk/rust-mcp-sdk && cargo build --example 65_durable_mcp_agent --features streamable-http` | ⬜ | ⬜ pending |
+| 06-02-01 | 02 | 2 | SDK-02 | build | `cd ~/Development/mcp/sdk/rust-mcp-sdk && cargo build --example 65_durable_mcp_agent --features streamable-http` | ⬜ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

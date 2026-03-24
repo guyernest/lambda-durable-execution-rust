@@ -57,9 +57,9 @@ Requirements for v2.0 Integration Plan milestone. Each maps to roadmap phases.
 
 ### PMCP SDK Example
 
-- [ ] **SDK-01**: Durable agent exposed as MCP server with TaskSupport::Required in rust-mcp-sdk examples
-- [ ] **SDK-02**: Task status mapping — durable execution states to MCP Task states (running->working, completed->completed, waiting_for_callback->input_required)
-- [ ] **SDK-03**: Progress reporting via MCP notifications during task execution (iteration count, tokens used)
+- [ ] **SDK-01**: Reference MCP agent example in rust-mcp-sdk demonstrating LLM + MCP tool loop with Durable Lambda checkpointing
+- [ ] **SDK-02**: Client-side MCP Tasks handling — agent detects task responses from long-running tools and polls via ctx.wait_for_condition() until completion
+- [ ] **SDK-03**: Structured progress logging with iteration count, tokens used, and tools called per agent loop iteration
 
 ## v1 Requirements (Complete)
 
