@@ -77,10 +77,10 @@ Plans:
   1. Token usage (input_tokens, output_tokens) is tracked for each LLM call and accumulated totals are available at the end of the run
   2. The final agent response includes iteration metadata: iteration count, total tokens consumed, list of tools called, and elapsed time
   3. Each durable step emits structured log entries with meaningful names (e.g., "llm-call-1", "tool-weather-api") via the SDK logger
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 04-01: TBD
+- [ ] 04-01-PLAN.md — AgentMetadata type, token tracking, tool name collection, elapsed time, and structured logging in handler
 
 ### Phase 5: Deployment and Validation
 **Goal**: Agent is deployed to AWS via SAM and validated end-to-end against a real MCP server
@@ -105,5 +105,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. LLM Client | 3/3 | Complete | 2026-03-23 |
 | 2. Configuration and MCP Integration | 0/2 | Planning complete | - |
 | 3. Agent Loop | 0/2 | Planning complete | - |
-| 4. Observability | 0/0 | Not started | - |
+| 4. Observability | 0/1 | Planning complete | - |
 | 5. Deployment and Validation | 0/0 | Not started | - |
