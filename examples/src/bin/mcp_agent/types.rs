@@ -16,15 +16,39 @@ pub struct AgentRequest {
     pub messages: Vec<UnifiedMessage>,
 }
 
+/// Metadata about the agent execution for observability (OBS-01, OBS-02).
+///
+/// Tracks token usage across all LLM call iterations, tool invocations,
+/// iteration count, and wall-clock elapsed time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMetadata {
+    /// Number of agent loop iterations executed.
+    pub iterations: u32,
+    /// Total input tokens across all LLM calls.
+    pub total_input_tokens: u32,
+    /// Total output tokens across all LLM calls.
+    pub total_output_tokens: u32,
+    /// Tool names called across all iterations (not deduplicated -- shows full history).
+    pub tools_called: Vec<String>,
+    /// Wall-clock milliseconds from handler start to response.
+    pub elapsed_ms: u64,
+}
+
 /// Agent handler output (per D-02 -- matches Step Functions LLMResponse shape).
 ///
 /// Uses `#[serde(flatten)]` so the JSON shape is identical to `LLMResponse`,
 /// providing a drop-in replacement for the Step Functions agent response.
+/// The optional `agent_metadata` field is omitted from JSON when `None`
+/// to preserve backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
     /// The final LLM response, flattened into the top-level JSON object.
     #[serde(flatten)]
     pub response: LLMResponse,
+    /// Agent execution metadata (token usage, iterations, elapsed time).
+    /// Omitted from serialized JSON when None for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_metadata: Option<AgentMetadata>,
 }
 
 /// Result of a single agent loop iteration (checkpointed by `run_in_child_context`).
@@ -135,6 +159,7 @@ mod tests {
         let llm_response = make_test_llm_response("end_turn", false);
         let agent_response = AgentResponse {
             response: llm_response,
+            agent_metadata: None,
         };
 
         let json = serde_json::to_value(&agent_response).expect("serialize");
@@ -219,5 +244,92 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(result.tool_use_id, "tu_1");
         assert_eq!(result.content, "42");
+    }
+
+    #[test]
+    fn test_agent_metadata_serde_round_trip() {
+        let metadata = AgentMetadata {
+            iterations: 3,
+            total_input_tokens: 1500,
+            total_output_tokens: 750,
+            tools_called: vec![
+                "calc__add".to_string(),
+                "search__query".to_string(),
+                "calc__add".to_string(),
+            ],
+            elapsed_ms: 4200,
+        };
+
+        let json_str = serde_json::to_string(&metadata).expect("serialize");
+        let deserialized: AgentMetadata = serde_json::from_str(&json_str).expect("deserialize");
+
+        assert_eq!(deserialized.iterations, 3);
+        assert_eq!(deserialized.total_input_tokens, 1500);
+        assert_eq!(deserialized.total_output_tokens, 750);
+        assert_eq!(deserialized.tools_called.len(), 3);
+        assert_eq!(deserialized.tools_called[0], "calc__add");
+        assert_eq!(deserialized.tools_called[1], "search__query");
+        assert_eq!(deserialized.tools_called[2], "calc__add");
+        assert_eq!(deserialized.elapsed_ms, 4200);
+    }
+
+    #[test]
+    fn test_agent_response_with_metadata() {
+        let llm_response = make_test_llm_response("end_turn", false);
+        let agent_response = AgentResponse {
+            response: llm_response,
+            agent_metadata: Some(AgentMetadata {
+                iterations: 2,
+                total_input_tokens: 500,
+                total_output_tokens: 200,
+                tools_called: vec!["calc__multiply".to_string()],
+                elapsed_ms: 3000,
+            }),
+        };
+
+        let json = serde_json::to_value(&agent_response).expect("serialize");
+
+        // agent_metadata should be present at top level alongside flattened LLM fields
+        assert!(
+            json.get("agent_metadata").is_some(),
+            "Expected 'agent_metadata' key in JSON"
+        );
+        assert!(
+            json.get("message").is_some(),
+            "Expected flattened 'message' key"
+        );
+        assert!(
+            json.get("metadata").is_some(),
+            "Expected flattened 'metadata' key"
+        );
+
+        // Verify agent_metadata fields
+        let am = &json["agent_metadata"];
+        assert_eq!(am["iterations"], 2);
+        assert_eq!(am["total_input_tokens"], 500);
+        assert_eq!(am["total_output_tokens"], 200);
+        assert_eq!(am["tools_called"][0], "calc__multiply");
+        assert_eq!(am["elapsed_ms"], 3000);
+    }
+
+    #[test]
+    fn test_agent_response_without_metadata() {
+        let llm_response = make_test_llm_response("end_turn", false);
+        let agent_response = AgentResponse {
+            response: llm_response,
+            agent_metadata: None,
+        };
+
+        let json = serde_json::to_value(&agent_response).expect("serialize");
+
+        // agent_metadata should NOT be present (skip_serializing_if works)
+        assert!(
+            json.get("agent_metadata").is_none(),
+            "agent_metadata should be absent when None"
+        );
+
+        // Flattened LLM fields should still be present
+        assert!(json.get("message").is_some());
+        assert!(json.get("metadata").is_some());
     }
 }

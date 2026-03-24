@@ -94,13 +94,15 @@ pub async fn agent_handler(
     // 4. Agent loop (LOOP-01, LOOP-04, LOOP-05, LOOP-06)
     let mut messages: Vec<UnifiedMessage> = event.messages;
     let max_iterations = config.parameters.max_iterations;
+    let config = Arc::new(config);
+    let tools_with_routing = Arc::new(tools_with_routing);
 
     for i in 0..max_iterations {
         info!(iteration = i, "Starting agent loop iteration");
 
         let llm = llm_service.clone();
-        let cfg = config.clone();
-        let tools = tools_with_routing.clone();
+        let cfg = Arc::clone(&config);
+        let tools = Arc::clone(&tools_with_routing);
         let msgs = messages.clone();
         let clients = mcp_clients.clone();
 
@@ -114,20 +116,28 @@ pub async fn agent_handler(
             )
             .await?;
 
-        // Append assistant message to history (LOOP-05)
-        messages.push(iteration_result.assistant_message.clone());
+        // Destructure to avoid clones (LOOP-05)
+        let IterationResult {
+            llm_response,
+            assistant_message,
+            tool_results_message,
+            is_final,
+        } = iteration_result;
+
+        messages.push(assistant_message);
 
         // Check if done (LOOP-07)
-        if iteration_result.is_final {
+        if is_final {
             info!(iteration = i, "Agent loop completed (final response)");
             return Ok(AgentResponse {
-                response: iteration_result.llm_response,
+                response: llm_response,
+                agent_metadata: None,
             });
         }
 
         // Append tool results to history (LOOP-05)
-        if let Some(tool_results_msg) = &iteration_result.tool_results_message {
-            messages.push(tool_results_msg.clone());
+        if let Some(tool_msg) = tool_results_message {
+            messages.push(tool_msg);
         }
     }
 
@@ -179,8 +189,11 @@ async fn execute_iteration(
     // 3. Build assistant message from LLM response
     let assistant_message = llm_response_to_assistant_message(&llm_response);
 
-    // 4. Check if this is the final iteration
-    let is_end_turn = llm_response.metadata.stop_reason.as_deref() == Some("end_turn");
+    // 4. Check if this is the final iteration (handle both Anthropic and OpenAI stop reasons)
+    let is_end_turn = matches!(
+        llm_response.metadata.stop_reason.as_deref(),
+        Some("end_turn" | "stop")
+    );
 
     let function_calls = llm_response.function_calls.clone().unwrap_or_default();
     let has_tool_calls = !function_calls.is_empty();
@@ -207,7 +220,7 @@ async fn execute_iteration(
         "Executing tool calls"
     );
 
-    let routing = tools.routing.clone();
+    let routing = Arc::new(tools.routing.clone());
     let clients = mcp_clients.clone();
 
     let batch_result = ctx
@@ -215,7 +228,7 @@ async fn execute_iteration(
             Some("tools"),
             function_calls,
             move |call: FunctionCall, _item_ctx: DurableContextHandle, _idx: usize| {
-                let r = routing.clone();
+                let r = Arc::clone(&routing);
                 let c = clients.clone();
                 async move {
                     execute_tool_call(&call, &r, &c)
