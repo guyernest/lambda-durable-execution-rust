@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-24T03:13:03.258Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-24T03:30:59.286Z"
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  completed_phases: 5
+  total_plans: 9
+  completed_plans: 9
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** A single Durable Lambda replaces Step Functions orchestration -- the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions.
-**Current focus:** Phase 04 — observability
+**Current focus:** Phase 05 — deployment-and-validation
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 05 (deployment-and-validation) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: Not started
 | Phase 03 P01 | 7min | 2 tasks | 12 files |
 | Phase 03 P02 | 4min | 2 tasks | 6 files |
 | Phase 04 P01 | 3min | 2 tasks | 2 files |
+| Phase 05 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Recent decisions affecting current work:
 - [Phase 04]: AgentMetadata is Option + skip_serializing_if for backward-compatible addition to AgentResponse
 - [Phase 04]: tools_called is Vec<String> not HashSet -- preserves call order and duplicates for full history
 - [Phase 04]: Elapsed time uses std::time::Instant (monotonic) not chrono for accuracy
+- [Phase 05]: Timeout 900s and MemorySize 256MB for McpAgentFunction to handle multi-iteration LLM calls
+- [Phase 05]: Validation message asks for tool listing to exercise config + MCP discovery paths without requiring tool execution
 
 ### Pending Todos
 
@@ -94,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T03:13:03.255Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-deployment-and-validation/05-CONTEXT.md
+Last session: 2026-03-24T03:30:59.283Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None

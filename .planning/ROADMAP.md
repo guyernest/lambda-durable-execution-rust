@@ -93,7 +93,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 05-01-PLAN.md — SAM template (McpAgentFunction + AgentRegistryTable + IAM) and end-to-end validation script
+- [x] 05-01-PLAN.md — SAM template (McpAgentFunction + AgentRegistryTable + IAM) and end-to-end validation script
 
 ## Progress
 

@@ -51,9 +51,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Deployment
 
-- [ ] **DEPL-01**: Agent deployable via SAM template with DurableConfig (nodejs24.x runtime + EXEC_WRAPPER pattern)
-- [ ] **DEPL-02**: IAM permissions for DynamoDB (AgentRegistry read), Secrets Manager (API key read), Lambda (checkpoint)
-- [ ] **DEPL-03**: End-to-end validation with at least one real MCP server
+- [x] **DEPL-01**: Agent deployable via SAM template with DurableConfig (nodejs24.x runtime + EXEC_WRAPPER pattern)
+- [x] **DEPL-02**: IAM permissions for DynamoDB (AgentRegistry read), Secrets Manager (API key read), Lambda (checkpoint)
+- [x] **DEPL-03**: End-to-end validation with at least one real MCP server
 
 ## v2 Requirements
 
@@ -124,9 +124,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | OBS-01 | Phase 4 | Complete |
 | OBS-02 | Phase 4 | Complete |
 | OBS-03 | Phase 4 | Complete |
-| DEPL-01 | Phase 5 | Pending |
-| DEPL-02 | Phase 5 | Pending |
-| DEPL-03 | Phase 5 | Pending |
+| DEPL-01 | Phase 5 | Complete |
+| DEPL-02 | Phase 5 | Complete |
+| DEPL-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 30 total
