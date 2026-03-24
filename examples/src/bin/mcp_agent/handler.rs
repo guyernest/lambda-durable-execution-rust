@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use lambda_durable_execution_rust::prelude::*;
 use tracing::info;
@@ -13,7 +14,7 @@ use crate::mcp::{
     discover_all_tools, establish_mcp_connections, execute_tool_call, McpClientCache,
     ToolsWithRouting,
 };
-use crate::types::{AgentRequest, AgentResponse, IterationResult, ToolCallResult};
+use crate::types::{AgentMetadata, AgentRequest, AgentResponse, IterationResult, ToolCallResult};
 
 /// Durable agent handler implementing the full agent loop.
 ///
@@ -34,6 +35,9 @@ pub async fn agent_handler(
         version = %event.version,
         "Starting durable agent handler"
     );
+
+    // OBS-02: Start wall-clock timer for elapsed_ms tracking
+    let start_time = Instant::now();
 
     // 1. Load config from AgentRegistry via durable step (CONF-04)
     let table_name =
@@ -97,6 +101,11 @@ pub async fn agent_handler(
     let config = Arc::new(config);
     let tools_with_routing = Arc::new(tools_with_routing);
 
+    // OBS-01: Initialize token and tool accumulation
+    let mut total_input_tokens: u32 = 0;
+    let mut total_output_tokens: u32 = 0;
+    let mut tools_called: Vec<String> = Vec::new();
+
     for i in 0..max_iterations {
         info!(iteration = i, "Starting agent loop iteration");
 
@@ -124,14 +133,67 @@ pub async fn agent_handler(
             is_final,
         } = iteration_result;
 
+        // OBS-01: Accumulate token usage from this iteration's LLM response
+        if let Some(ref tokens) = llm_response.metadata.tokens_used {
+            total_input_tokens += tokens.input_tokens;
+            total_output_tokens += tokens.output_tokens;
+        }
+
+        // OBS-02: Collect tool names from this iteration
+        if let Some(ref calls) = llm_response.function_calls {
+            for call in calls {
+                tools_called.push(call.name.clone());
+            }
+        }
+
+        // OBS-03: Structured end-of-iteration log
+        info!(
+            iteration = i,
+            input_tokens = llm_response
+                .metadata
+                .tokens_used
+                .as_ref()
+                .map(|t| t.input_tokens)
+                .unwrap_or(0),
+            output_tokens = llm_response
+                .metadata
+                .tokens_used
+                .as_ref()
+                .map(|t| t.output_tokens)
+                .unwrap_or(0),
+            total_input_tokens,
+            total_output_tokens,
+            tool_count = llm_response
+                .function_calls
+                .as_ref()
+                .map(|c| c.len())
+                .unwrap_or(0),
+            is_final,
+            "Iteration complete"
+        );
+
         messages.push(assistant_message);
 
         // Check if done (LOOP-07)
         if is_final {
-            info!(iteration = i, "Agent loop completed (final response)");
+            let elapsed = start_time.elapsed();
+            info!(
+                iteration = i,
+                total_input_tokens,
+                total_output_tokens,
+                tools_called = ?tools_called,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "Agent loop completed (final response)"
+            );
             return Ok(AgentResponse {
                 response: llm_response,
-                agent_metadata: None,
+                agent_metadata: Some(AgentMetadata {
+                    iterations: i + 1,
+                    total_input_tokens,
+                    total_output_tokens,
+                    tools_called,
+                    elapsed_ms: elapsed.as_millis() as u64,
+                }),
             });
         }
 
@@ -142,6 +204,15 @@ pub async fn agent_handler(
     }
 
     // Max iterations exceeded (LOOP-06)
+    let elapsed = start_time.elapsed();
+    info!(
+        max_iterations,
+        total_input_tokens,
+        total_output_tokens,
+        tools_called = ?tools_called,
+        elapsed_ms = elapsed.as_millis() as u64,
+        "Agent exceeded max iterations"
+    );
     Err(DurableError::Internal(format!(
         "Agent exceeded max iterations ({max_iterations}) without completing"
     )))
@@ -587,5 +658,117 @@ mod tests {
             }
             other => panic!("Expected Blocks content, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_token_accumulation_from_llm_response() {
+        // Simulate the accumulation logic from agent_handler
+        let responses = vec![
+            make_test_llm_response("tool_use", true), // 100 input, 50 output
+            make_test_llm_response("tool_use", true), // 100 input, 50 output
+            make_test_llm_response("end_turn", false), // 100 input, 50 output
+        ];
+
+        let mut total_input_tokens: u32 = 0;
+        let mut total_output_tokens: u32 = 0;
+
+        for resp in &responses {
+            if let Some(ref tokens) = resp.metadata.tokens_used {
+                total_input_tokens += tokens.input_tokens;
+                total_output_tokens += tokens.output_tokens;
+            }
+        }
+
+        assert_eq!(total_input_tokens, 300, "3 responses x 100 input tokens");
+        assert_eq!(total_output_tokens, 150, "3 responses x 50 output tokens");
+    }
+
+    #[test]
+    fn test_token_accumulation_handles_missing_tokens() {
+        // Verify accumulation works when tokens_used is None
+        let mut response = make_test_llm_response("end_turn", false);
+        response.metadata.tokens_used = None;
+
+        let mut total_input_tokens: u32 = 0;
+        let mut total_output_tokens: u32 = 0;
+
+        // First response has tokens (100/50)
+        let resp_with_tokens = make_test_llm_response("tool_use", true);
+        if let Some(ref tokens) = resp_with_tokens.metadata.tokens_used {
+            total_input_tokens += tokens.input_tokens;
+            total_output_tokens += tokens.output_tokens;
+        }
+
+        // Second response has no tokens
+        if let Some(ref tokens) = response.metadata.tokens_used {
+            total_input_tokens += tokens.input_tokens;
+            total_output_tokens += tokens.output_tokens;
+        }
+
+        assert_eq!(total_input_tokens, 100, "Only first response had tokens");
+        assert_eq!(total_output_tokens, 50, "Only first response had tokens");
+    }
+
+    #[test]
+    fn test_tools_called_collection() {
+        // Simulate the tool name collection logic from agent_handler
+        let responses = vec![
+            make_test_llm_response("tool_use", true), // has calc__multiply
+            make_test_llm_response("tool_use", true), // has calc__multiply
+            make_test_llm_response("end_turn", false), // no tool calls
+        ];
+
+        let mut tools_called: Vec<String> = Vec::new();
+
+        for resp in &responses {
+            if let Some(ref calls) = resp.function_calls {
+                for call in calls {
+                    tools_called.push(call.name.clone());
+                }
+            }
+        }
+
+        assert_eq!(tools_called.len(), 2);
+        assert_eq!(tools_called[0], "calc__multiply");
+        assert_eq!(tools_called[1], "calc__multiply");
+    }
+
+    #[test]
+    fn test_tools_called_preserves_order_and_duplicates() {
+        // Verify tools are NOT deduplicated and order is preserved
+        let mut resp1 = make_test_llm_response("tool_use", false);
+        resp1.function_calls = Some(vec![
+            FunctionCall {
+                id: "tu_1".to_string(),
+                name: "search__query".to_string(),
+                input: json!({"q": "test"}),
+            },
+            FunctionCall {
+                id: "tu_2".to_string(),
+                name: "calc__add".to_string(),
+                input: json!({"a": 1, "b": 2}),
+            },
+        ]);
+
+        let mut resp2 = make_test_llm_response("tool_use", false);
+        resp2.function_calls = Some(vec![FunctionCall {
+            id: "tu_3".to_string(),
+            name: "search__query".to_string(),
+            input: json!({"q": "another"}),
+        }]);
+
+        let mut tools_called: Vec<String> = Vec::new();
+        for resp in &[resp1, resp2] {
+            if let Some(ref calls) = resp.function_calls {
+                for call in calls {
+                    tools_called.push(call.name.clone());
+                }
+            }
+        }
+
+        assert_eq!(tools_called.len(), 3);
+        assert_eq!(tools_called[0], "search__query");
+        assert_eq!(tools_called[1], "calc__add");
+        assert_eq!(tools_called[2], "search__query"); // duplicate preserved
     }
 }
