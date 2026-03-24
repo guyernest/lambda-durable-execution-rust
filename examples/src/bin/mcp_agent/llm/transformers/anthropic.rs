@@ -78,7 +78,6 @@ impl MessageTransformer for AnthropicTransformer {
         // Add Anthropic-specific headers
         let mut headers = HashMap::new();
         headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
-        headers.insert("content-type".to_string(), "application/json".to_string());
 
         Ok(TransformedRequest { body, headers })
     }
@@ -437,10 +436,8 @@ mod tests {
             result.headers.get("anthropic-version").unwrap(),
             "2023-06-01"
         );
-        assert_eq!(
-            result.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        // content-type is set by reqwest's .json() method, not in transformer headers
+        assert!(!result.headers.contains_key("content-type"));
     }
 
     #[test]

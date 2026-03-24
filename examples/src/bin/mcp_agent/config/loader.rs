@@ -81,9 +81,7 @@ pub fn map_provider_config(
 ) -> Result<ProviderConfig, ConfigError> {
     match llm_provider {
         "claude" | "anthropic" => {
-            let mut custom_headers = HashMap::new();
-            custom_headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
-
+            // anthropic-version header is injected by AnthropicTransformer, not here
             Ok(ProviderConfig {
                 provider_id: "anthropic".to_string(),
                 model_id: llm_model.to_string(),
@@ -95,7 +93,7 @@ pub fn map_provider_config(
                 request_transformer: "anthropic_v1".to_string(),
                 response_transformer: "anthropic_v1".to_string(),
                 timeout: 120,
-                custom_headers: Some(custom_headers),
+                custom_headers: None,
             })
         }
         "openai" => Ok(ProviderConfig {
@@ -125,19 +123,6 @@ fn get_string(item: &HashMap<String, AttributeValue>, key: &str) -> Result<Strin
         .ok_or_else(|| ConfigError::MissingField(key.to_string()))
 }
 
-/// Extracts a required JSON-encoded string (S) attribute and deserializes it.
-#[allow(dead_code)]
-fn get_json_string_as<T: DeserializeOwned>(
-    item: &HashMap<String, AttributeValue>,
-    key: &str,
-) -> Result<T, ConfigError> {
-    let raw = get_string(item, key)?;
-    serde_json::from_str(&raw).map_err(|e| ConfigError::InvalidJson {
-        field: key.to_string(),
-        source: e,
-    })
-}
-
 /// Extracts an optional JSON-encoded string (S) attribute, returning a default
 /// if the field is missing. Returns `ConfigError::InvalidJson` if the field
 /// exists but contains malformed JSON.
@@ -147,7 +132,10 @@ fn get_optional_json_string_as<T: DeserializeOwned>(
     default: T,
 ) -> T {
     match item.get(key).and_then(|v| v.as_s().ok()) {
-        Some(raw) => serde_json::from_str(raw).unwrap_or(default),
+        Some(raw) => serde_json::from_str(raw).unwrap_or_else(|e| {
+            tracing::warn!(field = key, error = %e, "Invalid JSON in optional field, using default");
+            default
+        }),
         None => default,
     }
 }
@@ -155,6 +143,18 @@ fn get_optional_json_string_as<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-only helper: extracts a required JSON-encoded string attribute.
+    fn get_json_string_as<T: DeserializeOwned>(
+        item: &HashMap<String, AttributeValue>,
+        key: &str,
+    ) -> Result<T, ConfigError> {
+        let raw = get_string(item, key)?;
+        serde_json::from_str(&raw).map_err(|e| ConfigError::InvalidJson {
+            field: key.to_string(),
+            source: e,
+        })
+    }
 
     /// Helper: build a DynamoDB attribute map with all required and optional fields.
     fn full_item() -> HashMap<String, AttributeValue> {
@@ -302,8 +302,8 @@ mod tests {
         assert_eq!(config.request_transformer, "anthropic_v1");
         assert_eq!(config.response_transformer, "anthropic_v1");
         assert_eq!(config.timeout, 120);
-        let headers = config.custom_headers.expect("should have custom headers");
-        assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+        // anthropic-version header is injected by AnthropicTransformer, not in ProviderConfig
+        assert!(config.custom_headers.is_none());
     }
 
     #[test]

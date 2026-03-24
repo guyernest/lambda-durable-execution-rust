@@ -14,6 +14,7 @@ pub use openai::OpenAITransformer;
 ///
 /// Each provider (Anthropic, OpenAI) implements this trait to handle its wire format.
 /// Methods are synchronous because they perform only JSON transformation, no I/O.
+/// Provider-specific headers are returned via [`TransformedRequest::headers`].
 pub trait MessageTransformer: Send + Sync {
     /// Transform a unified LLM invocation to a provider-specific request body and headers.
     fn transform_request(&self, invocation: &LLMInvocation)
@@ -21,11 +22,6 @@ pub trait MessageTransformer: Send + Sync {
 
     /// Transform a provider-specific JSON response to the unified response format.
     fn transform_response(&self, response: Value) -> Result<TransformedResponse, LlmError>;
-
-    /// Get provider-specific headers (e.g. anthropic-version).
-    fn get_headers(&self) -> HashMap<String, String> {
-        HashMap::new()
-    }
 }
 
 /// Registry mapping transformer IDs to their implementations.

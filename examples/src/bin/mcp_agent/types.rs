@@ -122,8 +122,7 @@ mod tests {
         assert!(serialized.get("messages").is_some());
 
         let json_str = serde_json::to_string(&request).expect("serialize to string");
-        let deserialized: AgentRequest =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let deserialized: AgentRequest = serde_json::from_str(&json_str).expect("deserialize");
 
         assert_eq!(deserialized.agent_name, "test-agent");
         assert_eq!(deserialized.version, "v1");
@@ -178,8 +177,7 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&iteration).expect("serialize");
-        let deserialized: IterationResult =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let deserialized: IterationResult = serde_json::from_str(&json_str).expect("deserialize");
 
         assert!(deserialized.is_final);
         assert!(deserialized.tool_results_message.is_none());
@@ -203,8 +201,7 @@ mod tests {
         };
 
         let json_str = serde_json::to_string(&result).expect("serialize");
-        let deserialized: ToolCallResult =
-            serde_json::from_str(&json_str).expect("deserialize");
+        let deserialized: ToolCallResult = serde_json::from_str(&json_str).expect("deserialize");
 
         assert!(deserialized.is_error);
         assert_eq!(deserialized.tool_use_id, "tu_99");

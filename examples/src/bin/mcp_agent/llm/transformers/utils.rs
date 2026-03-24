@@ -53,44 +53,45 @@ pub fn extract_u32(value: &Value, paths: &[&str], default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-/// Generate a unique ID for tool calls.
-pub fn generate_tool_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    format!("call_{timestamp}")
-}
-
 /// Clean and validate JSON schema for tools.
 ///
 /// Ensures the schema is an object type with properties. Non-object inputs
 /// are normalized to `{ "type": "object", "properties": {} }`.
+/// Passes through standard JSON Schema fields that LLMs use for tool parameters.
 pub fn clean_tool_schema(schema: &Value) -> Value {
     if let Value::Object(map) = schema {
         let mut clean = serde_json::Map::new();
 
-        // Always set type to object
         clean.insert("type".to_string(), Value::String("object".to_string()));
 
-        // Copy properties if they exist
-        if let Some(props) = map.get("properties") {
-            clean.insert("properties".to_string(), props.clone());
-        }
-
-        // Copy required fields if they exist
-        if let Some(required) = map.get("required") {
-            if let Value::Array(arr) = required {
-                if !arr.is_empty() {
-                    clean.insert("required".to_string(), required.clone());
+        // Pass through standard JSON Schema fields used by tool parameters
+        for &field in &[
+            "properties",
+            "required",
+            "additionalProperties",
+            "description",
+            "enum",
+            "default",
+            "allOf",
+            "anyOf",
+            "oneOf",
+            "items",
+        ] {
+            if let Some(val) = map.get(field) {
+                // Skip empty required arrays
+                if field == "required" {
+                    if let Value::Array(arr) = val {
+                        if arr.is_empty() {
+                            continue;
+                        }
+                    }
                 }
+                clean.insert(field.to_string(), val.clone());
             }
         }
 
         Value::Object(clean)
     } else {
-        // Default to empty object schema
         serde_json::json!({
             "type": "object",
             "properties": {}
@@ -154,13 +155,6 @@ mod tests {
         let value = json!({"tokens": 150});
         assert_eq!(extract_u32(&value, &["tokens"], 0), 150);
         assert_eq!(extract_u32(&value, &["missing"], 42), 42);
-    }
-
-    #[test]
-    fn test_generate_tool_id_format() {
-        let id = generate_tool_id();
-        assert!(id.starts_with("call_"));
-        assert!(id.len() > 5);
     }
 
     #[test]

@@ -306,8 +306,7 @@ mod tests {
     use super::*;
     use crate::config::types::AgentParameters;
     use crate::llm::models::{
-        AssistantMessage, ContentBlock, FunctionCall, ProviderConfig, ResponseMetadata,
-        TokenUsage,
+        AssistantMessage, ContentBlock, FunctionCall, ProviderConfig, ResponseMetadata, TokenUsage,
     };
     use serde_json::json;
 
@@ -528,9 +527,7 @@ mod tests {
             MessageContent::Blocks { content } => {
                 assert_eq!(content.len(), 1);
                 match &content[0] {
-                    ContentBlock::ToolResult {
-                        is_error, ..
-                    } => {
+                    ContentBlock::ToolResult { is_error, .. } => {
                         // MCP-05: is_error: true produces Some(true)
                         assert_eq!(*is_error, Some(true));
                     }
