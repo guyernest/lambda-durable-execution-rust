@@ -15,6 +15,9 @@ Parameters:
   RustLog:
     Type: String
     Default: info
+  AgentRegistryTableName:
+    Type: String
+    Default: AgentRegistry
 
 Globals:
   Function:
@@ -35,6 +38,52 @@ Globals:
         AWS_LAMBDA_EXEC_WRAPPER: /var/task/bootstrap
 
 Resources:
+  AgentRegistryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref AgentRegistryTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: agent_name
+          AttributeType: S
+        - AttributeName: version
+          AttributeType: S
+      KeySchema:
+        - AttributeName: agent_name
+          KeyType: HASH
+        - AttributeName: version
+          KeyType: RANGE
+
+  McpAgentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+      BuildProperties:
+        Binary: mcp_agent
+    Properties:
+      CodeUri: .
+      Timeout: 900
+      MemorySize: 256
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt AgentRegistryTable.Arn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: "*"
+      Environment:
+        Variables:
+          AGENT_REGISTRY_TABLE: !Ref AgentRegistryTable
+
   MapOperationsExampleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -363,3 +412,9 @@ Outputs:
   ChildContextExampleFunctionArn:
     Description: Child context example function ARN
     Value: !GetAtt ChildContextExampleFunction.Arn
+  McpAgentFunctionArn:
+    Description: MCP Agent function ARN
+    Value: !GetAtt McpAgentFunction.Arn
+  AgentRegistryTableName:
+    Description: AgentRegistry DynamoDB table name
+    Value: !Ref AgentRegistryTable
