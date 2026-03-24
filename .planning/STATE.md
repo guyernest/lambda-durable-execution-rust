@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-24T01:45:56.571Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-24T02:06:37.613Z"
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 8
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** A single Durable Lambda replaces Step Functions orchestration -- the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions.
-**Current focus:** Phase 03 — agent-loop
+**Current focus:** Phase 04 — observability
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
+Phase: 04 (observability) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Plan: Not started
 | Phase 02 P02 | 4min | 1 tasks | 6 files |
 | Phase 03 P01 | 7min | 2 tasks | 12 files |
 | Phase 03 P02 | 4min | 2 tasks | 6 files |
+| Phase 04 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,9 @@ Recent decisions affecting current work:
 - [Phase 03]: AgentResponse uses serde(flatten) on LLMResponse for Step Functions output compatibility
 - [Phase 03]: MCP tool errors (is_error: true) passed to LLM as error tool_results, not handler failures
 - [Phase 03]: Kept #[allow(unused_imports)] on module re-exports (public API surface not yet consumed by production code)
+- [Phase 04]: AgentMetadata is Option + skip_serializing_if for backward-compatible addition to AgentResponse
+- [Phase 04]: tools_called is Vec<String> not HashSet -- preserves call order and duplicates for full history
+- [Phase 04]: Elapsed time uses std::time::Instant (monotonic) not chrono for accuracy
 
 ### Pending Todos
 
@@ -90,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T01:45:56.568Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-observability/04-CONTEXT.md
+Last session: 2026-03-24T02:06:37.610Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: None

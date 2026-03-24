@@ -45,9 +45,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Observability
 
-- [ ] **OBS-01**: Token usage (input_tokens, output_tokens) tracked per LLM call and accumulated across iterations
-- [ ] **OBS-02**: Iteration metadata in final response: iteration count, total tokens, tools called, time elapsed
-- [ ] **OBS-03**: Per-step structured logging via SDK logger with meaningful step names (e.g., "llm-call-1", "tool-weather-api")
+- [x] **OBS-01**: Token usage (input_tokens, output_tokens) tracked per LLM call and accumulated across iterations
+- [x] **OBS-02**: Iteration metadata in final response: iteration count, total tokens, tools called, time elapsed
+- [x] **OBS-03**: Per-step structured logging via SDK logger with meaningful step names (e.g., "llm-call-1", "tool-weather-api")
 
 ### Deployment
 
@@ -121,9 +121,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | LOOP-05 | Phase 3 | Complete |
 | LOOP-06 | Phase 3 | Complete |
 | LOOP-07 | Phase 3 | Complete |
-| OBS-01 | Phase 4 | Pending |
-| OBS-02 | Phase 4 | Pending |
-| OBS-03 | Phase 4 | Pending |
+| OBS-01 | Phase 4 | Complete |
+| OBS-02 | Phase 4 | Complete |
+| OBS-03 | Phase 4 | Complete |
 | DEPL-01 | Phase 5 | Pending |
 | DEPL-02 | Phase 5 | Pending |
 | DEPL-03 | Phase 5 | Pending |

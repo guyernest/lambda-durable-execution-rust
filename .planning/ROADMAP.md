@@ -80,7 +80,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 04-01-PLAN.md — AgentMetadata type, token tracking, tool name collection, elapsed time, and structured logging in handler
+- [x] 04-01-PLAN.md — AgentMetadata type, token tracking, tool name collection, elapsed time, and structured logging in handler
 
 ### Phase 5: Deployment and Validation
 **Goal**: Agent is deployed to AWS via SAM and validated end-to-end against a real MCP server
