@@ -124,7 +124,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [x] 06-01-PLAN.md — Cargo.toml dev-dependencies and core agent example with LLM + MCP tool loop (SDK-01, SDK-03)
+- [ ] 06-01-PLAN.md — Cargo.toml dev-dependencies and core agent example with LLM + MCP tool loop (SDK-01, SDK-03)
 - [ ] 06-02-PLAN.md — Task-aware tool execution with wait_for_condition polling (SDK-02)
 
 ### Phase 7: pmcp-run Agents Tab
@@ -175,7 +175,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9
 | 3. Agent Loop | v1.0 | 2/2 | Complete | 2026-03-23 |
 | 4. Observability | v1.0 | 1/1 | Complete | 2026-03-23 |
 | 5. Deployment and Validation | v1.0 | 1/1 | Complete | 2026-03-23 |
-| 6. PMCP SDK Example | v2.0 | 1/2 | In progress | - |
+| 6. PMCP SDK Example | v2.0 | 0/2 | Planned    |  |
 | 7. pmcp-run Agents Tab | v2.0 | 0/? | Not started | - |
 | 8. Channels and Approval Flow | v2.0 | 0/? | Not started | - |
 | 9. Agent Teams | v2.0 | 0/? | Not started | - |
