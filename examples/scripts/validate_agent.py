@@ -138,7 +138,7 @@ def invoke_agent(
     payload = {
         "agent_name": agent_name,
         "version": version,
-        "messages": [{"role": "user", "content": {"content": user_message}}],
+        "messages": [{"role": "user", "content": user_message}],
     }
     resp = lambda_client.invoke(
         FunctionName=function_arn,
