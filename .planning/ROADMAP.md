@@ -90,10 +90,10 @@ Plans:
   1. Agent is deployable via SAM template with DurableConfig using the nodejs24.x runtime + EXEC_WRAPPER pattern, matching existing example patterns in this repo
   2. IAM role grants least-privilege permissions for DynamoDB (AgentRegistry read), Secrets Manager (API key read), and Lambda checkpoint operations
   3. A deployed agent invoked with a real MCP server completes an end-to-end run: loads config, discovers tools, calls LLM, executes tools, and returns a final response
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 05-01: TBD
+- [ ] 05-01-PLAN.md — SAM template (McpAgentFunction + AgentRegistryTable + IAM) and end-to-end validation script
 
 ## Progress
 
@@ -106,4 +106,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Configuration and MCP Integration | 0/2 | Planning complete | - |
 | 3. Agent Loop | 0/2 | Planning complete | - |
 | 4. Observability | 0/1 | Planning complete | - |
-| 5. Deployment and Validation | 0/0 | Not started | - |
+| 5. Deployment and Validation | 0/1 | Planning complete | - |
