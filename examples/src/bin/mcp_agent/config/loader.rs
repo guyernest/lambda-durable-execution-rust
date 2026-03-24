@@ -88,8 +88,8 @@ pub fn map_provider_config(
                 endpoint: "https://api.anthropic.com/v1/messages".to_string(),
                 auth_header_name: "x-api-key".to_string(),
                 auth_header_prefix: None,
-                secret_path: "prod/anthropic/api-key".to_string(),
-                secret_key_name: "api_key".to_string(),
+                secret_path: "/ai-agent/llm-secrets/prod".to_string(),
+                secret_key_name: "ANTHROPIC_API_KEY".to_string(),
                 request_transformer: "anthropic_v1".to_string(),
                 response_transformer: "anthropic_v1".to_string(),
                 timeout: 120,
@@ -102,8 +102,8 @@ pub fn map_provider_config(
             endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
             auth_header_name: "Authorization".to_string(),
             auth_header_prefix: Some("Bearer ".to_string()),
-            secret_path: "prod/openai/api-key".to_string(),
-            secret_key_name: "api_key".to_string(),
+            secret_path: "/ai-agent/llm-secrets/prod".to_string(),
+            secret_key_name: "OPENAI_API_KEY".to_string(),
             request_transformer: "openai_v1".to_string(),
             response_transformer: "openai_v1".to_string(),
             timeout: 120,
@@ -297,8 +297,8 @@ mod tests {
         assert_eq!(config.endpoint, "https://api.anthropic.com/v1/messages");
         assert_eq!(config.auth_header_name, "x-api-key");
         assert!(config.auth_header_prefix.is_none());
-        assert_eq!(config.secret_path, "prod/anthropic/api-key");
-        assert_eq!(config.secret_key_name, "api_key");
+        assert_eq!(config.secret_path, "/ai-agent/llm-secrets/prod");
+        assert_eq!(config.secret_key_name, "ANTHROPIC_API_KEY");
         assert_eq!(config.request_transformer, "anthropic_v1");
         assert_eq!(config.response_transformer, "anthropic_v1");
         assert_eq!(config.timeout, 120);
@@ -324,7 +324,7 @@ mod tests {
         );
         assert_eq!(config.auth_header_name, "Authorization");
         assert_eq!(config.auth_header_prefix.as_deref(), Some("Bearer "));
-        assert_eq!(config.secret_path, "prod/openai/api-key");
+        assert_eq!(config.secret_path, "/ai-agent/llm-secrets/prod");
         assert_eq!(config.request_transformer, "openai_v1");
         assert_eq!(config.response_transformer, "openai_v1");
         assert_eq!(config.timeout, 120);
