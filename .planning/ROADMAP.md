@@ -66,7 +66,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Agent types (request/response/iteration), MCP tool execution, and durable handler with full agent loop
+- [x] 03-01-PLAN.md — Agent types (request/response/iteration), MCP tool execution, and durable handler with full agent loop
 - [ ] 03-02-PLAN.md — Unit tests for handler helpers and types, full suite verification and cleanup
 
 ### Phase 4: Observability

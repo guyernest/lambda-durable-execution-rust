@@ -29,19 +29,19 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **MCP-01**: Agent connects to configured MCP servers via pmcp HttpTransport and initializes each connection
 - [x] **MCP-02**: Agent discovers tools from each MCP server via `list_tools()` and merges into a unified tool list
 - [x] **MCP-03**: MCP tool schemas translated to Claude API tool format (name, description, input_schema)
-- [ ] **MCP-04**: Agent executes tool calls via MCP `call_tool()` with tool results mapped to Anthropic tool_result content blocks
-- [ ] **MCP-05**: MCP tool errors (isError: true) passed to LLM as error tool_results -- agent does not fail, LLM decides recovery
+- [x] **MCP-04**: Agent executes tool calls via MCP `call_tool()` with tool results mapped to Anthropic tool_result content blocks
+- [x] **MCP-05**: MCP tool errors (isError: true) passed to LLM as error tool_results -- agent does not fail, LLM decides recovery
 - [x] **MCP-06**: MCP connection failure at startup fails fast with clear error (no calling LLM with zero tools)
 
 ### Agent Loop
 
-- [ ] **LOOP-01**: Agentic loop: call LLM -> check for tool_use -> execute tools -> append results -> repeat until end_turn
-- [ ] **LOOP-02**: Each LLM call is a durable `ctx.step()` with ExponentialBackoff retry for transient failures
-- [ ] **LOOP-03**: Tool calls executed in parallel via `ctx.map()` when LLM returns multiple tool_use blocks
-- [ ] **LOOP-04**: Each loop iteration uses `run_in_child_context` to isolate operation ID counters for replay determinism
-- [ ] **LOOP-05**: Message history assembled incrementally from step results -- rebuilds naturally during replay
-- [ ] **LOOP-06**: Max iterations guard from AgentRegistry config -- returns graceful error when exceeded
-- [ ] **LOOP-07**: Final LLM response returned as durable execution result
+- [x] **LOOP-01**: Agentic loop: call LLM -> check for tool_use -> execute tools -> append results -> repeat until end_turn
+- [x] **LOOP-02**: Each LLM call is a durable `ctx.step()` with ExponentialBackoff retry for transient failures
+- [x] **LOOP-03**: Tool calls executed in parallel via `ctx.map()` when LLM returns multiple tool_use blocks
+- [x] **LOOP-04**: Each loop iteration uses `run_in_child_context` to isolate operation ID counters for replay determinism
+- [x] **LOOP-05**: Message history assembled incrementally from step results -- rebuilds naturally during replay
+- [x] **LOOP-06**: Max iterations guard from AgentRegistry config -- returns graceful error when exceeded
+- [x] **LOOP-07**: Final LLM response returned as durable execution result
 
 ### Observability
 
@@ -111,16 +111,16 @@ Deferred to future release. Tracked but not in current roadmap.
 | MCP-01 | Phase 2 | Complete |
 | MCP-02 | Phase 2 | Complete |
 | MCP-03 | Phase 2 | Complete |
-| MCP-04 | Phase 3 | Pending |
-| MCP-05 | Phase 3 | Pending |
+| MCP-04 | Phase 3 | Complete |
+| MCP-05 | Phase 3 | Complete |
 | MCP-06 | Phase 2 | Complete |
-| LOOP-01 | Phase 3 | Pending |
-| LOOP-02 | Phase 3 | Pending |
-| LOOP-03 | Phase 3 | Pending |
-| LOOP-04 | Phase 3 | Pending |
-| LOOP-05 | Phase 3 | Pending |
-| LOOP-06 | Phase 3 | Pending |
-| LOOP-07 | Phase 3 | Pending |
+| LOOP-01 | Phase 3 | Complete |
+| LOOP-02 | Phase 3 | Complete |
+| LOOP-03 | Phase 3 | Complete |
+| LOOP-04 | Phase 3 | Complete |
+| LOOP-05 | Phase 3 | Complete |
+| LOOP-06 | Phase 3 | Complete |
+| LOOP-07 | Phase 3 | Complete |
 | OBS-01 | Phase 4 | Pending |
 | OBS-02 | Phase 4 | Pending |
 | OBS-03 | Phase 4 | Pending |

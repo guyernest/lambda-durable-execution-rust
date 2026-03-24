@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-24T00:17:29.231Z"
+status: Ready to execute
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-24T00:58:13.826Z"
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 7
+  completed_plans: 6
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-23)
 
 **Core value:** A single Durable Lambda replaces Step Functions orchestration -- the agent loop is plain Rust code with checkpointed LLM calls and MCP tool executions.
-**Current focus:** Phase 02 — configuration-and-mcp-integration
+**Current focus:** Phase 03 — agent-loop
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (agent-loop) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Plan: Not started
 | Phase 01 P03 | 4min | 2 tasks | 5 files |
 | Phase 02 P01 | 3min | 1 tasks | 6 files |
 | Phase 02 P02 | 4min | 1 tasks | 6 files |
+| Phase 03 P01 | 7min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Optional DynamoDB JSON fields fall back to defaults on parse failure for schema evolution flexibility
 - [Phase 02]: Renamed thiserror source fields to reason for String compatibility in McpError
 - [Phase 02]: Used ToolInfo::new() constructor (not struct literal) because pmcp ToolInfo is #[non_exhaustive]
+- [Phase 03]: MCP connections established outside durable steps and cached in Arc<HashMap> -- call_tool takes &self so Arc sharing sufficient without RwLock
+- [Phase 03]: AgentResponse uses serde(flatten) on LLMResponse for Step Functions output compatibility
+- [Phase 03]: MCP tool errors (is_error: true) passed to LLM as error tool_results, not handler failures
 
 ### Pending Todos
 
@@ -84,6 +88,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T00:17:29.224Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-agent-loop/03-CONTEXT.md
+Last session: 2026-03-24T00:58:13.824Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None
