@@ -49,17 +49,18 @@ pub async fn discover_all_tools(server_urls: &[String]) -> Result<ToolsWithRouti
     })
 }
 
-/// Connect to a single MCP server, initialize, and discover its tools.
+/// Create an initialized MCP client for the given URL.
 ///
-/// Uses `StreamableHttpTransport` with TLS (per D-04). Connections are
-/// ephemeral (per D-07) -- only the returned `ToolInfo` list persists.
-async fn connect_and_discover_parsed(parsed_url: url::Url) -> Result<Vec<ToolInfo>, McpError> {
-    let server_url = parsed_url.as_str().to_string();
-
+/// Builds `StreamableHttpTransport` with TLS, creates the client, and runs
+/// the MCP initialization handshake.
+async fn create_initialized_client(
+    parsed_url: url::Url,
+    original_url: &str,
+) -> Result<Client<StreamableHttpTransport>, McpError> {
     let config = StreamableHttpTransportConfig {
         url: parsed_url,
         extra_headers: vec![],
-        auth_provider: None, // Per D-05: no auth for PoC
+        auth_provider: None,
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
@@ -74,9 +75,20 @@ async fn connect_and_discover_parsed(parsed_url: url::Url) -> Result<Vec<ToolInf
         .initialize(ClientCapabilities::default())
         .await
         .map_err(|e| McpError::InitializationFailed {
-            url: server_url.to_string(),
+            url: original_url.to_string(),
             reason: e.to_string(),
         })?;
+
+    Ok(client)
+}
+
+/// Connect to a single MCP server, initialize, and discover its tools.
+///
+/// Uses `StreamableHttpTransport` with TLS (per D-04). Connections are
+/// ephemeral (per D-07) -- only the returned `ToolInfo` list persists.
+async fn connect_and_discover_parsed(parsed_url: url::Url) -> Result<Vec<ToolInfo>, McpError> {
+    let server_url = parsed_url.as_str().to_string();
+    let client = create_initialized_client(parsed_url, &server_url).await?;
 
     // Paginate through all tool pages (MCP-02)
     let mut all_tools = Vec::new();
@@ -166,29 +178,7 @@ pub async fn establish_mcp_connections(server_urls: &[String]) -> Result<McpClie
     for url_str in server_urls {
         let parsed =
             url::Url::parse(url_str).map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
-
-        let config = StreamableHttpTransportConfig {
-            url: parsed,
-            extra_headers: vec![],
-            auth_provider: None,
-            session_id: None,
-            enable_json_response: false,
-            on_resumption_token: None,
-            http_middleware_chain: None,
-        };
-
-        let transport = StreamableHttpTransport::new(config);
-        let mut client =
-            Client::with_info(transport, Implementation::new("durable-mcp-agent", "0.1.0"));
-
-        client
-            .initialize(ClientCapabilities::default())
-            .await
-            .map_err(|e| McpError::InitializationFailed {
-                url: url_str.to_string(),
-                reason: e.to_string(),
-            })?;
-
+        let client = create_initialized_client(parsed, url_str).await?;
         clients.insert(url_str.clone(), client);
     }
 

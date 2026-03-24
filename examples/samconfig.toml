@@ -1,14 +1,14 @@
 version = 0.1
 
 [default.deploy.parameters]
-stack_name = "durable-rust"
+stack_name = "durable-agent"
 resolve_s3 = true
-s3_prefix = "durable-rust"
-region = "us-east-1"
+s3_prefix = "durable-agent"
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "Architecture=\"arm64\" RustLog=\"info\""
+parameter_overrides = "Architecture=\"arm64\" RustLog=\"info\" AgentRegistryTableName=\"AgentRegistry\""
 image_repositories = []
+profile = "CGI-PoC"
 
 [default.global.parameters]
-region = "us-east-1"
+region = "eu-west-1"
 beta_features = "true"
