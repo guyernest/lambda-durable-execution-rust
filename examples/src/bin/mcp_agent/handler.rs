@@ -300,3 +300,282 @@ fn build_tool_results_message(results: Vec<ToolCallResult>) -> UnifiedMessage {
         content: MessageContent::Blocks { content: blocks },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::AgentParameters;
+    use crate::llm::models::{
+        AssistantMessage, ContentBlock, FunctionCall, ProviderConfig, ResponseMetadata,
+        TokenUsage,
+    };
+    use serde_json::json;
+
+    fn make_test_config() -> AgentConfig {
+        AgentConfig {
+            agent_name: "test-agent".to_string(),
+            version: "v1".to_string(),
+            system_prompt: "You are a helpful assistant.".to_string(),
+            provider_config: ProviderConfig {
+                provider_id: "anthropic".to_string(),
+                model_id: "claude-sonnet-4-20250514".to_string(),
+                endpoint: "https://api.anthropic.com/v1/messages".to_string(),
+                auth_header_name: "x-api-key".to_string(),
+                auth_header_prefix: None,
+                secret_path: "test/secret".to_string(),
+                secret_key_name: "api_key".to_string(),
+                request_transformer: "anthropic_v1".to_string(),
+                response_transformer: "anthropic_v1".to_string(),
+                timeout: 120,
+                custom_headers: None,
+            },
+            mcp_server_urls: vec![],
+            parameters: AgentParameters {
+                max_iterations: 10,
+                temperature: 0.7,
+                max_tokens: 4096,
+                timeout_seconds: 120,
+            },
+        }
+    }
+
+    fn make_test_llm_response(stop_reason: &str, with_tool_calls: bool) -> LLMResponse {
+        let mut content = vec![ContentBlock::Text {
+            text: "Hello!".to_string(),
+        }];
+        let function_calls = if with_tool_calls {
+            content.push(ContentBlock::ToolUse {
+                id: "tu_1".to_string(),
+                name: "calc__multiply".to_string(),
+                input: json!({"a": 2, "b": 3}),
+            });
+            Some(vec![FunctionCall {
+                id: "tu_1".to_string(),
+                name: "calc__multiply".to_string(),
+                input: json!({"a": 2, "b": 3}),
+            }])
+        } else {
+            None
+        };
+
+        LLMResponse {
+            message: AssistantMessage {
+                role: "assistant".to_string(),
+                content,
+                tool_calls: None,
+            },
+            function_calls,
+            metadata: ResponseMetadata {
+                model_id: "claude-sonnet-4-20250514".to_string(),
+                provider_id: "anthropic".to_string(),
+                latency_ms: 500,
+                tokens_used: Some(TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    total_tokens: 150,
+                }),
+                stop_reason: Some(stop_reason.to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn test_build_llm_invocation_prepends_system_prompt() {
+        let config = make_test_config();
+        let messages = vec![UnifiedMessage {
+            role: "user".to_string(),
+            content: MessageContent::Text {
+                content: "What is 2+2?".to_string(),
+            },
+        }];
+        let tools = vec![UnifiedTool {
+            name: "calc__add".to_string(),
+            description: "Adds numbers".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        }];
+
+        let invocation = build_llm_invocation(&config, &messages, &tools);
+
+        // First message should be the system prompt
+        assert_eq!(invocation.messages[0].role, "system");
+        match &invocation.messages[0].content {
+            MessageContent::Text { content } => {
+                assert_eq!(content, "You are a helpful assistant.");
+            }
+            _ => panic!("Expected Text content for system message"),
+        }
+
+        // Second message should be the user message
+        assert_eq!(invocation.messages[1].role, "user");
+
+        // Total messages: system + 1 user = 2
+        assert_eq!(invocation.messages.len(), 2);
+
+        // Tools should be Some when non-empty
+        assert!(invocation.tools.is_some());
+        assert_eq!(invocation.tools.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_build_llm_invocation_empty_tools() {
+        let config = make_test_config();
+        let messages = vec![UnifiedMessage {
+            role: "user".to_string(),
+            content: MessageContent::Text {
+                content: "Hello".to_string(),
+            },
+        }];
+
+        let invocation = build_llm_invocation(&config, &messages, &[]);
+
+        assert!(invocation.tools.is_none());
+    }
+
+    #[test]
+    fn test_build_llm_invocation_passes_temperature_and_max_tokens() {
+        let mut config = make_test_config();
+        config.parameters.temperature = 0.3;
+        config.parameters.max_tokens = 2048;
+
+        let messages = vec![UnifiedMessage {
+            role: "user".to_string(),
+            content: MessageContent::Text {
+                content: "Hello".to_string(),
+            },
+        }];
+
+        let invocation = build_llm_invocation(&config, &messages, &[]);
+
+        assert_eq!(invocation.temperature, Some(0.3));
+        assert_eq!(invocation.max_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_llm_response_to_assistant_message() {
+        let response = make_test_llm_response("tool_use", true);
+        let msg = llm_response_to_assistant_message(&response);
+
+        assert_eq!(msg.role, "assistant");
+        match &msg.content {
+            MessageContent::Blocks { content } => {
+                assert_eq!(content.len(), 2);
+                // First block should be Text
+                match &content[0] {
+                    ContentBlock::Text { text } => assert_eq!(text, "Hello!"),
+                    other => panic!("Expected Text block, got: {other:?}"),
+                }
+                // Second block should be ToolUse
+                match &content[1] {
+                    ContentBlock::ToolUse { id, name, input } => {
+                        assert_eq!(id, "tu_1");
+                        assert_eq!(name, "calc__multiply");
+                        assert_eq!(input, &json!({"a": 2, "b": 3}));
+                    }
+                    other => panic!("Expected ToolUse block, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Blocks content, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_tool_results_message_success() {
+        let results = vec![ToolCallResult {
+            tool_use_id: "tu_1".to_string(),
+            content: "result".to_string(),
+            is_error: false,
+        }];
+
+        let msg = build_tool_results_message(results);
+
+        assert_eq!(msg.role, "user");
+        match &msg.content {
+            MessageContent::Blocks { content } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } => {
+                        assert_eq!(tool_use_id, "tu_1");
+                        assert_eq!(content, "result");
+                        // is_error should be None (not Some(false)) for JSON compat
+                        assert!(
+                            is_error.is_none(),
+                            "is_error should be None for success, not Some(false)"
+                        );
+                    }
+                    other => panic!("Expected ToolResult block, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Blocks content, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_tool_results_message_with_error() {
+        let results = vec![ToolCallResult {
+            tool_use_id: "tu_err".to_string(),
+            content: "Tool execution failed".to_string(),
+            is_error: true,
+        }];
+
+        let msg = build_tool_results_message(results);
+
+        assert_eq!(msg.role, "user");
+        match &msg.content {
+            MessageContent::Blocks { content } => {
+                assert_eq!(content.len(), 1);
+                match &content[0] {
+                    ContentBlock::ToolResult {
+                        is_error, ..
+                    } => {
+                        // MCP-05: is_error: true produces Some(true)
+                        assert_eq!(*is_error, Some(true));
+                    }
+                    other => panic!("Expected ToolResult block, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected Blocks content, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_tool_results_message_multiple() {
+        let results = vec![
+            ToolCallResult {
+                tool_use_id: "tu_1".to_string(),
+                content: "result 1".to_string(),
+                is_error: false,
+            },
+            ToolCallResult {
+                tool_use_id: "tu_2".to_string(),
+                content: "result 2".to_string(),
+                is_error: false,
+            },
+            ToolCallResult {
+                tool_use_id: "tu_3".to_string(),
+                content: "error result".to_string(),
+                is_error: true,
+            },
+        ];
+
+        let msg = build_tool_results_message(results);
+
+        assert_eq!(msg.role, "user");
+        match &msg.content {
+            MessageContent::Blocks { content } => {
+                assert_eq!(content.len(), 3);
+                // Verify each block is a ToolResult
+                for block in content {
+                    assert!(
+                        matches!(block, ContentBlock::ToolResult { .. }),
+                        "Expected ToolResult block"
+                    );
+                }
+            }
+            other => panic!("Expected Blocks content, got: {other:?}"),
+        }
+    }
+}
