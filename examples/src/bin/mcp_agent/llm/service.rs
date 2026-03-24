@@ -49,6 +49,7 @@ impl UnifiedLLMService {
     }
 
     /// Create a service with pre-built components (for testing).
+    #[allow(dead_code)]
     pub fn new_with_components(
         secret_manager: Arc<SecretManager>,
         http_client: Client,

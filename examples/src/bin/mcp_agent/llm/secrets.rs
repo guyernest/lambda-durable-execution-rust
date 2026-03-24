@@ -38,6 +38,7 @@ impl SecretManager {
     }
 
     /// Create a new SecretManager with a pre-configured client (for testing).
+    #[allow(dead_code)]
     pub fn new_with_client(client: SecretsClient) -> Self {
         Self {
             client: Arc::new(client),
@@ -74,18 +75,24 @@ impl SecretManager {
             }
         }
 
-        // Remove expired entry if present (write lock)
+        // Acquire write lock — re-check cache to avoid duplicate fetches (TOCTOU)
         {
             let mut cache = self.cache.write().await;
             if let Some(cached) = cache.get(secret_path) {
-                if cached.expires_at <= Instant::now() {
-                    debug!("Cache expired, removing entry");
-                    cache.remove(secret_path);
+                if cached.expires_at > Instant::now() {
+                    debug!("Cache refreshed by another task");
+                    if let Some(api_key) = cached.value.get(key_name) {
+                        return Ok(api_key.clone());
+                    }
+                    return Err(LlmError::SecretKeyNotFound(
+                        key_name.to_string(),
+                        secret_path.to_string(),
+                    ));
                 }
+                cache.remove(secret_path);
             }
         }
 
-        // Fetch from Secrets Manager
         info!(secret_path = %secret_path, "Fetching secret from AWS Secrets Manager");
 
         let response = self
@@ -103,13 +110,9 @@ impl SecretManager {
             .secret_string()
             .ok_or_else(|| LlmError::SecretNotFound(secret_path.to_string()))?;
 
-        // Parse and extract the key
-        let api_key = parse_secret_json(secret_string, key_name, secret_path)?;
+        // Parse once, extract key and build cache map from the same parse
+        let (api_key, secret_map) = parse_secret(secret_string, key_name, secret_path)?;
 
-        // Build full secret map for caching
-        let secret_map = parse_secret_to_map(secret_string)?;
-
-        // Cache with TTL (write lock)
         {
             let mut cache = self.cache.write().await;
             cache.insert(
@@ -131,6 +134,7 @@ impl SecretManager {
     }
 
     /// Clear all cached secrets.
+    #[allow(dead_code)]
     pub async fn clear_cache(&self) {
         info!("Clearing secret cache");
         let mut cache = self.cache.write().await;
@@ -138,66 +142,52 @@ impl SecretManager {
     }
 }
 
-/// Parse a secret JSON string and extract a specific key value.
-///
-/// Returns `InvalidConfiguration` if the string is not a JSON object,
-/// and `SecretKeyNotFound` if the key does not exist in the object.
-fn parse_secret_json(
+/// Parse a secret JSON string once: extract the requested key and build the
+/// full cache map from the same parse. Returns `(api_key, secret_map)`.
+fn parse_secret(
     json_str: &str,
     key_name: &str,
     secret_path: &str,
-) -> Result<String, LlmError> {
+) -> Result<(String, HashMap<String, String>), LlmError> {
     let secret_json: Value = serde_json::from_str(json_str).map_err(|e| {
         warn!("Failed to parse secret JSON: {}", e);
         LlmError::InvalidConfiguration(format!("Secret is not valid JSON: {e}"))
     })?;
 
-    match secret_json {
-        Value::Object(map) => {
-            for (k, v) in &map {
-                if k == key_name {
-                    if let Value::String(s) = v {
-                        return Ok(s.clone());
-                    } else {
-                        return Err(LlmError::InvalidConfiguration(format!(
-                            "Secret key '{key_name}' is not a string value"
-                        )));
-                    }
-                }
-            }
-            Err(LlmError::SecretKeyNotFound(
+    let Value::Object(map) = secret_json else {
+        return Err(LlmError::InvalidConfiguration(
+            "Secret is not a JSON object".to_string(),
+        ));
+    };
+
+    let api_key = match map.get(key_name) {
+        Some(Value::String(s)) => s.clone(),
+        Some(_) => {
+            return Err(LlmError::InvalidConfiguration(format!(
+                "Secret key '{key_name}' is not a string value"
+            )));
+        }
+        None => {
+            return Err(LlmError::SecretKeyNotFound(
                 key_name.to_string(),
                 secret_path.to_string(),
-            ))
+            ));
         }
-        _ => Err(LlmError::InvalidConfiguration(
-            "Secret is not a JSON object".to_string(),
-        )),
-    }
-}
+    };
 
-/// Parse a secret JSON string into a HashMap of string key-value pairs.
-fn parse_secret_to_map(json_str: &str) -> Result<HashMap<String, String>, LlmError> {
-    let secret_json: Value = serde_json::from_str(json_str)
-        .map_err(|e| LlmError::InvalidConfiguration(format!("Secret is not valid JSON: {e}")))?;
+    let secret_map: HashMap<String, String> = map
+        .into_iter()
+        .filter_map(|(k, v)| {
+            if let Value::String(s) = v {
+                Some((k, s))
+            } else {
+                warn!("Skipping non-string value for key: {}", k);
+                None
+            }
+        })
+        .collect();
 
-    if let Value::Object(map) = secret_json {
-        Ok(map
-            .into_iter()
-            .filter_map(|(k, v)| {
-                if let Value::String(s) = v {
-                    Some((k, s))
-                } else {
-                    warn!("Skipping non-string value for key: {}", k);
-                    None
-                }
-            })
-            .collect())
-    } else {
-        Err(LlmError::InvalidConfiguration(
-            "Secret is not a JSON object".to_string(),
-        ))
-    }
+    Ok((api_key, secret_map))
 }
 
 #[cfg(test)]
@@ -205,16 +195,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_secret_json_extracts_key() {
+    fn test_parse_secret_extracts_key_and_map() {
         let json = r#"{"api_key": "sk-test-123", "other": "value"}"#;
-        let result = parse_secret_json(json, "api_key", "test/secret");
-        assert_eq!(result.unwrap(), "sk-test-123");
+        let (key, map) = parse_secret(json, "api_key", "test/secret").unwrap();
+        assert_eq!(key, "sk-test-123");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["other"], "value");
     }
 
     #[test]
-    fn test_parse_secret_json_key_not_found() {
+    fn test_parse_secret_key_not_found() {
         let json = r#"{"api_key": "sk-test-123"}"#;
-        let result = parse_secret_json(json, "missing_key", "test/secret");
+        let result = parse_secret(json, "missing_key", "test/secret");
         match result {
             Err(LlmError::SecretKeyNotFound(key, path)) => {
                 assert_eq!(key, "missing_key");
@@ -225,9 +217,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_secret_json_not_object() {
+    fn test_parse_secret_not_object() {
         let json = r#""just a string""#;
-        let result = parse_secret_json(json, "api_key", "test/secret");
+        let result = parse_secret(json, "api_key", "test/secret");
         match result {
             Err(LlmError::InvalidConfiguration(msg)) => {
                 assert!(msg.contains("not a JSON object"), "got: {msg}");
@@ -237,9 +229,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_secret_json_array_not_object() {
+    fn test_parse_secret_array_not_object() {
         let json = r#"[1, 2, 3]"#;
-        let result = parse_secret_json(json, "api_key", "test/secret");
+        let result = parse_secret(json, "api_key", "test/secret");
         match result {
             Err(LlmError::InvalidConfiguration(msg)) => {
                 assert!(msg.contains("not a JSON object"), "got: {msg}");
@@ -249,9 +241,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_secret_json_non_string_value() {
+    fn test_parse_secret_non_string_value() {
         let json = r#"{"api_key": 12345}"#;
-        let result = parse_secret_json(json, "api_key", "test/secret");
+        let result = parse_secret(json, "api_key", "test/secret");
         match result {
             Err(LlmError::InvalidConfiguration(msg)) => {
                 assert!(msg.contains("not a string value"), "got: {msg}");
@@ -261,8 +253,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_secret_json_invalid_json() {
-        let result = parse_secret_json("not json at all", "api_key", "test/secret");
+    fn test_parse_secret_invalid_json() {
+        let result = parse_secret("not json at all", "api_key", "test/secret");
         match result {
             Err(LlmError::InvalidConfiguration(msg)) => {
                 assert!(msg.contains("not valid JSON"), "got: {msg}");
@@ -272,11 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_secret_to_map_filters_non_strings() {
+    fn test_parse_secret_filters_non_string_values_in_map() {
         let json = r#"{"key1": "value1", "key2": 42, "key3": "value3"}"#;
-        let map = parse_secret_to_map(json).unwrap();
+        let (key, map) = parse_secret(json, "key1", "test/secret").unwrap();
+        assert_eq!(key, "value1");
         assert_eq!(map.len(), 2);
-        assert_eq!(map["key1"], "value1");
         assert_eq!(map["key3"], "value3");
         assert!(!map.contains_key("key2"));
     }

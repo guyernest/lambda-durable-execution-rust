@@ -50,10 +50,12 @@ pub enum LlmError {
     TransformError(String),
 
     /// The request timed out after the specified number of seconds.
+    #[allow(dead_code)]
     #[error("Timeout after {0} seconds")]
     Timeout(u64),
 
     /// An unclassified error.
+    #[allow(dead_code)]
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -63,6 +65,7 @@ impl LlmError {
     ///
     /// Retryable status codes: 429 (rate limit), 500 (internal server error),
     /// 502 (bad gateway), 503 (service unavailable), 529 (overloaded).
+    #[allow(dead_code)]
     pub fn is_retryable(&self) -> bool {
         match self {
             LlmError::ProviderApiError { status, .. } => {

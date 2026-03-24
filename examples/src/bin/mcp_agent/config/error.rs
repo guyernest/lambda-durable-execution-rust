@@ -20,6 +20,7 @@ pub enum ConfigError {
     MissingField(String),
 
     /// A JSON-encoded field could not be deserialized.
+    #[allow(dead_code)]
     #[error("Invalid JSON in field {field}: {source}")]
     InvalidJson {
         /// The DynamoDB field name.
@@ -32,10 +33,6 @@ pub enum ConfigError {
     /// The `llm_provider` value does not map to a known provider.
     #[error("Unsupported LLM provider: {0}")]
     UnsupportedProvider(String),
-
-    /// A URL field contains an invalid URL.
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
 
     /// An error from the DynamoDB SDK.
     #[error("DynamoDB error: {0}")]

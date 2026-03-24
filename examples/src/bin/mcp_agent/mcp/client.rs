@@ -31,8 +31,8 @@ pub async fn discover_all_tools(server_urls: &[String]) -> Result<ToolsWithRouti
     let mut routing = HashMap::new();
 
     for url_str in server_urls {
-        let parsed = url::Url::parse(url_str)
-            .map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
+        let parsed =
+            url::Url::parse(url_str).map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
         let prefix = extract_host_prefix_from(&parsed, url_str)?;
         let tools = connect_and_discover_parsed(parsed).await?;
 
@@ -146,8 +146,8 @@ pub fn resolve_tool_call(
         .ok_or_else(|| McpError::UnknownTool(prefixed_name.to_string()))?;
 
     let original_name = prefixed_name
-        .splitn(2, "__")
-        .nth(1)
+        .split_once("__")
+        .map(|x| x.1)
         .ok_or_else(|| McpError::InvalidToolName(prefixed_name.to_string()))?;
 
     Ok((server_url.clone(), original_name.to_string()))
@@ -160,14 +160,12 @@ pub fn resolve_tool_call(
 /// `Arc<HashMap>` keyed by the original URL string.
 ///
 /// Fails fast with `McpError::InitializationFailed` if any server fails.
-pub async fn establish_mcp_connections(
-    server_urls: &[String],
-) -> Result<McpClientCache, McpError> {
+pub async fn establish_mcp_connections(server_urls: &[String]) -> Result<McpClientCache, McpError> {
     let mut clients = HashMap::new();
 
     for url_str in server_urls {
-        let parsed = url::Url::parse(url_str)
-            .map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
+        let parsed =
+            url::Url::parse(url_str).map_err(|_| McpError::InvalidUrl(url_str.to_string()))?;
 
         let config = StreamableHttpTransportConfig {
             url: parsed,
@@ -211,12 +209,12 @@ pub async fn execute_tool_call(
 ) -> Result<ToolCallResult, McpError> {
     let (server_url, original_name) = resolve_tool_call(&call.name, routing)?;
 
-    let client = mcp_clients.get(&server_url).ok_or_else(|| {
-        McpError::ToolExecutionFailed {
+    let client = mcp_clients
+        .get(&server_url)
+        .ok_or_else(|| McpError::ToolExecutionFailed {
             tool: call.name.clone(),
             reason: format!("No cached client for server URL: {server_url}"),
-        }
-    })?;
+        })?;
 
     let result = client
         .call_tool(original_name, call.input.clone())
