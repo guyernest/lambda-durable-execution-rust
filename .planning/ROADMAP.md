@@ -1,8 +1,9 @@
-# Roadmap: Durable Lambda MCP Agent
+# Roadmap: Durable Lambda MCP Agent Platform
 
-## Overview
+## Milestones
 
-Build a Rust Lambda binary that implements an LLM agent loop (call Claude/GPT, execute MCP tools, repeat) using the durable execution SDK for replay-safe checkpointing. The project progresses from foundation types and LLM client, through configuration and MCP integration, into the core agent loop, then adds observability, and finally deploys with end-to-end validation. Each phase delivers a coherent, testable capability that unblocks the next.
+- **v1.0 Durable MCP Agent** - Phases 1-5 (shipped 2026-03-23)
+- **v2.0 Integration Plan** - Phases 6-9 (in progress)
 
 ## Phases
 
@@ -12,13 +13,28 @@ Build a Rust Lambda binary that implements an LLM agent loop (call Claude/GPT, e
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: LLM Client** - Anthropic and OpenAI client with typed request/response, error classification, and Secrets Manager auth
-- [ ] **Phase 2: Configuration and MCP Integration** - AgentRegistry config loading and MCP server connection, tool discovery, and schema translation
-- [ ] **Phase 3: Agent Loop** - Core durable agent loop wiring LLM calls and MCP tool execution with replay-safe message history
-- [ ] **Phase 4: Observability** - Token tracking, iteration metadata, and structured per-step logging
-- [ ] **Phase 5: Deployment and Validation** - SAM template, IAM permissions, and end-to-end validation with real MCP servers
+<details>
+<summary>v1.0 Durable MCP Agent (Phases 1-5) - SHIPPED 2026-03-23</summary>
+
+- [x] **Phase 1: LLM Client** - Anthropic and OpenAI client with typed request/response, error classification, and Secrets Manager auth
+- [x] **Phase 2: Configuration and MCP Integration** - AgentRegistry config loading and MCP server connection, tool discovery, and schema translation
+- [x] **Phase 3: Agent Loop** - Core durable agent loop wiring LLM calls and MCP tool execution with replay-safe message history
+- [x] **Phase 4: Observability** - Token tracking, iteration metadata, and structured per-step logging
+- [x] **Phase 5: Deployment and Validation** - SAM template, IAM permissions, and end-to-end validation with real MCP servers
+
+</details>
+
+### v2.0 Integration Plan (Phases 6-9)
+
+- [ ] **Phase 6: PMCP SDK Example** - Durable agent exposed as MCP server with MCP Tasks lifecycle, status mapping, and progress reporting
+- [ ] **Phase 7: pmcp-run Agents Tab** - Agent CRUD UI in LCARS design system, model registry, on-demand execution, execution history, metrics dashboard, and cost tracking
+- [ ] **Phase 8: Channels and Approval Flow** - Channel abstraction with Slack/Discord/webhook adapters, webhook receiver Lambda, durable send/receive, deny-by-default security, and tool approval gates
+- [ ] **Phase 9: Agent Teams** - Agent-as-MCP-tool wrapping, sequential and parallel team execution, delegation depth guard, circular delegation prevention, shared context via S3, and response summarization
 
 ## Phase Details
+
+<details>
+<summary>v1.0 Phase Details (Phases 1-5)</summary>
 
 ### Phase 1: LLM Client
 **Goal**: Agent can call Anthropic and OpenAI LLM APIs with typed requests/responses, classify errors for retry, and retrieve API keys securely
@@ -95,15 +111,67 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md — SAM template (McpAgentFunction + AgentRegistryTable + IAM) and end-to-end validation script
 
+</details>
+
+### Phase 6: PMCP SDK Example
+**Goal**: The durable agent is packaged as a reference MCP server example that demonstrates MCP Tasks lifecycle integration, proving the platform can be consumed through the standard MCP protocol
+**Depends on**: Phase 5 (v1.0 complete)
+**Requirements**: SDK-01, SDK-02, SDK-03
+**Success Criteria** (what must be TRUE):
+  1. A durable agent binary runs as an MCP server with TaskSupport::Required, and an MCP client can submit a task that triggers a full agent execution
+  2. Task status correctly reflects durable execution state -- running maps to working, completed maps to completed, and waiting_for_callback maps to input_required
+  3. During task execution, the MCP server sends progress notifications reporting iteration count and tokens used, which the client can observe in real time
+**Plans**: TBD
+
+### Phase 7: pmcp-run Agents Tab
+**Goal**: Users can create, configure, execute, and monitor agents through the pmcp-run web UI without touching DynamoDB, SAM templates, or the command line
+**Depends on**: Phase 6
+**Requirements**: PMCP-01, PMCP-02, PMCP-03, PMCP-04, PMCP-05, PMCP-06, PMCP-07, PMCP-08, PMCP-09, PMCP-10, PMCP-11, PMCP-12
+**Success Criteria** (what must be TRUE):
+  1. User navigates to the Agents tab and sees a list of all configured agents with their name, status, model, and connected MCP servers
+  2. User creates a new agent through a form (instructions, model, MCP servers, channel config, parameters), and the agent appears in the list and is immediately invocable
+  3. User triggers an agent execution from the UI with custom input, sees the execution status update from running to completed/failed, and can view the full conversation history including tool calls and results
+  4. User views a metrics dashboard showing token usage charts and execution success rates across agents, with cost tracking broken down by model
+  5. User manages LLM provider API keys through the UI via Secrets Manager integration, and selects from a model registry with provider and pricing information
+**Plans**: TBD
+
+### Phase 8: Channels and Approval Flow
+**Goal**: Agent can send messages to and receive responses from external platforms (Slack, Discord, webhooks) through named channels, and can pause for human approval before executing dangerous tools
+**Depends on**: Phase 7
+**Requirements**: CHAN-01, CHAN-02, CHAN-03, CHAN-04, CHAN-05, CHAN-06, CHAN-07, CHAN-08, CHAN-09, CHAN-10, CHAN-11, APPR-01, APPR-02, APPR-03, APPR-04
+**Success Criteria** (what must be TRUE):
+  1. Agent sends a message to a configured Slack channel and the message appears in the correct Slack workspace/channel within seconds
+  2. Agent sends an approval request for a dangerous tool call, suspends via wait_for_callback(), and resumes with the human's approve/deny/modify response when the webhook receiver processes the callback
+  3. Webhook Receiver Lambda receives a Slack/Discord interaction payload, validates its signature, returns 200 within 3 seconds, and asynchronously resumes the suspended agent via SendDurableExecutionCallbackSuccess
+  4. An agent configured with no allowed channels cannot send or receive through any channel, even if channel adapters are registered in the system
+  5. Approval requests that exceed their configured timeout are automatically denied and the agent continues without executing the tool
+**Plans**: TBD
+
+### Phase 9: Agent Teams
+**Goal**: An orchestrator agent can delegate work to specialist agents -- sequentially for pipeline patterns or in parallel for fan-out patterns -- with safeguards against circular delegation and checkpoint overflow
+**Depends on**: Phase 8
+**Requirements**: TEAM-01, TEAM-02, TEAM-03, TEAM-04, TEAM-05, TEAM-06, TEAM-07, TEAM-08, TEAM-09
+**Success Criteria** (what must be TRUE):
+  1. An orchestrator agent sees its team members as callable tools (with descriptions derived from each member's agent config) and can invoke them through the normal LLM tool-use flow
+  2. A team of 3 specialists invoked via ctx.map() executes in parallel, and each specialist's response is summarized to a configurable size limit before being checkpointed to the orchestrator's context
+  3. An agent delegation chain that exceeds the configured maximum depth (e.g., 3) is rejected with a clear error rather than creating additional invocations
+  4. An agent that has already been visited in the current delegation chain cannot be delegated to again, preventing circular loops (A delegates to B delegates to A)
+  5. Team members can read and write shared context files via S3 Files MCP resources during their execution
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 6 -> 7 -> 8 -> 9
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. LLM Client | 3/3 | Complete | 2026-03-23 |
-| 2. Configuration and MCP Integration | 0/2 | Planning complete | - |
-| 3. Agent Loop | 0/2 | Planning complete | - |
-| 4. Observability | 0/1 | Planning complete | - |
-| 5. Deployment and Validation | 0/1 | Planning complete | - |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. LLM Client | v1.0 | 3/3 | Complete | 2026-03-23 |
+| 2. Configuration and MCP Integration | v1.0 | 2/2 | Complete | 2026-03-23 |
+| 3. Agent Loop | v1.0 | 2/2 | Complete | 2026-03-23 |
+| 4. Observability | v1.0 | 1/1 | Complete | 2026-03-23 |
+| 5. Deployment and Validation | v1.0 | 1/1 | Complete | 2026-03-23 |
+| 6. PMCP SDK Example | v2.0 | 0/? | Not started | - |
+| 7. pmcp-run Agents Tab | v2.0 | 0/? | Not started | - |
+| 8. Channels and Approval Flow | v2.0 | 0/? | Not started | - |
+| 9. Agent Teams | v2.0 | 0/? | Not started | - |

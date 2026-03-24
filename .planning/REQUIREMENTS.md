@@ -1,7 +1,7 @@
 # Requirements: Durable Lambda MCP Agent Platform
 
 **Defined:** 2026-03-24
-**Core Value:** A single Durable Lambda replaces Step Functions orchestration — extended with channels for human/agent interaction, teams for multi-agent coordination, and pmcp.run for unified management.
+**Core Value:** A single Durable Lambda replaces Step Functions orchestration -- extended with channels for human/agent interaction, teams for multi-agent coordination, and pmcp.run for unified management.
 
 ## v2 Requirements
 
@@ -131,51 +131,51 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CHAN-01 | TBD | Pending |
-| CHAN-02 | TBD | Pending |
-| CHAN-03 | TBD | Pending |
-| CHAN-04 | TBD | Pending |
-| CHAN-05 | TBD | Pending |
-| CHAN-06 | TBD | Pending |
-| CHAN-07 | TBD | Pending |
-| CHAN-08 | TBD | Pending |
-| CHAN-09 | TBD | Pending |
-| CHAN-10 | TBD | Pending |
-| CHAN-11 | TBD | Pending |
-| APPR-01 | TBD | Pending |
-| APPR-02 | TBD | Pending |
-| APPR-03 | TBD | Pending |
-| APPR-04 | TBD | Pending |
-| TEAM-01 | TBD | Pending |
-| TEAM-02 | TBD | Pending |
-| TEAM-03 | TBD | Pending |
-| TEAM-04 | TBD | Pending |
-| TEAM-05 | TBD | Pending |
-| TEAM-06 | TBD | Pending |
-| TEAM-07 | TBD | Pending |
-| TEAM-08 | TBD | Pending |
-| TEAM-09 | TBD | Pending |
-| PMCP-01 | TBD | Pending |
-| PMCP-02 | TBD | Pending |
-| PMCP-03 | TBD | Pending |
-| PMCP-04 | TBD | Pending |
-| PMCP-05 | TBD | Pending |
-| PMCP-06 | TBD | Pending |
-| PMCP-07 | TBD | Pending |
-| PMCP-08 | TBD | Pending |
-| PMCP-09 | TBD | Pending |
-| PMCP-10 | TBD | Pending |
-| PMCP-11 | TBD | Pending |
-| PMCP-12 | TBD | Pending |
-| SDK-01 | TBD | Pending |
-| SDK-02 | TBD | Pending |
-| SDK-03 | TBD | Pending |
+| SDK-01 | Phase 6 | Pending |
+| SDK-02 | Phase 6 | Pending |
+| SDK-03 | Phase 6 | Pending |
+| PMCP-01 | Phase 7 | Pending |
+| PMCP-02 | Phase 7 | Pending |
+| PMCP-03 | Phase 7 | Pending |
+| PMCP-04 | Phase 7 | Pending |
+| PMCP-05 | Phase 7 | Pending |
+| PMCP-06 | Phase 7 | Pending |
+| PMCP-07 | Phase 7 | Pending |
+| PMCP-08 | Phase 7 | Pending |
+| PMCP-09 | Phase 7 | Pending |
+| PMCP-10 | Phase 7 | Pending |
+| PMCP-11 | Phase 7 | Pending |
+| PMCP-12 | Phase 7 | Pending |
+| CHAN-01 | Phase 8 | Pending |
+| CHAN-02 | Phase 8 | Pending |
+| CHAN-03 | Phase 8 | Pending |
+| CHAN-04 | Phase 8 | Pending |
+| CHAN-05 | Phase 8 | Pending |
+| CHAN-06 | Phase 8 | Pending |
+| CHAN-07 | Phase 8 | Pending |
+| CHAN-08 | Phase 8 | Pending |
+| CHAN-09 | Phase 8 | Pending |
+| CHAN-10 | Phase 8 | Pending |
+| CHAN-11 | Phase 8 | Pending |
+| APPR-01 | Phase 8 | Pending |
+| APPR-02 | Phase 8 | Pending |
+| APPR-03 | Phase 8 | Pending |
+| APPR-04 | Phase 8 | Pending |
+| TEAM-01 | Phase 9 | Pending |
+| TEAM-02 | Phase 9 | Pending |
+| TEAM-03 | Phase 9 | Pending |
+| TEAM-04 | Phase 9 | Pending |
+| TEAM-05 | Phase 9 | Pending |
+| TEAM-06 | Phase 9 | Pending |
+| TEAM-07 | Phase 9 | Pending |
+| TEAM-08 | Phase 9 | Pending |
+| TEAM-09 | Phase 9 | Pending |
 
 **Coverage:**
 - v2 requirements: 39 total
-- Mapped to phases: 0 (pending roadmap creation)
-- Unmapped: 39
+- Mapped to phases: 39/39
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-24*
-*Last updated: 2026-03-24 after milestone v2.0 definition*
+*Last updated: 2026-03-24 after roadmap revision (Phases 6-9 reordered)*
