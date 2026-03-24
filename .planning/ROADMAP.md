@@ -124,8 +124,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 06-01-PLAN.md — Cargo.toml dev-dependencies and core agent example with LLM + MCP tool loop (SDK-01, SDK-03)
-- [ ] 06-02-PLAN.md — Task-aware tool execution with wait_for_condition polling (SDK-02)
+- [x] 06-01-PLAN.md — Cargo.toml dev-dependencies and core agent example with LLM + MCP tool loop (SDK-01, SDK-03)
+- [x] 06-02-PLAN.md — Task-aware tool execution with wait_for_condition polling (SDK-02)
 
 ### Phase 7: pmcp-run Agents Tab
 **Goal**: Users can create, configure, execute, and monitor agents through the pmcp-run web UI without touching DynamoDB, SAM templates, or the command line
