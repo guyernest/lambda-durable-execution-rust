@@ -23,6 +23,12 @@ pub struct AgentRequest {
     /// Pre-resolved config — when present, skips DynamoDB lookup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inline_config: Option<InlineAgentConfig>,
+    /// Execution tracking ID — when present, the handler writes status back to DynamoDB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// DynamoDB table for execution tracking (required if execution_id is set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executions_table: Option<String>,
 }
 
 fn default_version() -> String {
@@ -204,6 +210,8 @@ mod tests {
                 },
             }],
             inline_config: None,
+            execution_id: None,
+            executions_table: None,
         };
 
         let serialized = serde_json::to_value(&request).expect("serialize");

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_durable_execution_rust::prelude::*;
 use tracing::info;
 
@@ -36,6 +37,8 @@ pub async fn agent_handler(
         version,
         messages: initial_messages,
         inline_config,
+        execution_id,
+        executions_table,
     } = event;
 
     info!(
@@ -192,14 +195,33 @@ pub async fn agent_handler(
         // Check if done (LOOP-07)
         if is_final {
             let elapsed = start_time.elapsed();
+            let elapsed_ms = elapsed.as_millis() as u64;
             info!(
                 iteration = i,
                 total_input_tokens,
                 total_output_tokens,
                 tools_called = ?tools_called,
-                elapsed_ms = elapsed.as_millis() as u64,
+                elapsed_ms,
                 "Agent loop completed (final response)"
             );
+
+            // Extract final text for execution record
+            let final_text = extract_final_text(&llm_response);
+
+            update_execution_status(&ExecutionUpdate {
+                execution_id: &execution_id,
+                executions_table: &executions_table,
+                status: "completed",
+                output: Some(&final_text),
+                error_message: None,
+                iterations: i + 1,
+                input_tokens: total_input_tokens,
+                output_tokens: total_output_tokens,
+                tools_called: &tools_called,
+                elapsed_ms,
+            })
+            .await;
+
             return Ok(AgentResponse {
                 response: llm_response,
                 agent_metadata: Some(AgentMetadata {
@@ -207,30 +229,47 @@ pub async fn agent_handler(
                     total_input_tokens,
                     total_output_tokens,
                     tools_called,
-                    elapsed_ms: elapsed.as_millis() as u64,
+                    elapsed_ms,
                 }),
             });
         }
 
-        // Append tool results to history (LOOP-05)
+        // Append tool results to history
         if let Some(tool_msg) = tool_results_message {
             messages.push(tool_msg);
         }
     }
 
-    // Max iterations exceeded (LOOP-06)
+    // Max iterations exceeded
     let elapsed = start_time.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    let error_msg = format!(
+        "Agent exceeded max iterations ({max_iterations}) without completing"
+    );
     info!(
         max_iterations,
         total_input_tokens,
         total_output_tokens,
         tools_called = ?tools_called,
-        elapsed_ms = elapsed.as_millis() as u64,
+        elapsed_ms,
         "Agent exceeded max iterations"
     );
-    Err(DurableError::Internal(format!(
-        "Agent exceeded max iterations ({max_iterations}) without completing"
-    )))
+
+    update_execution_status(&ExecutionUpdate {
+        execution_id: &execution_id,
+        executions_table: &executions_table,
+        status: "failed",
+        output: None,
+        error_message: Some(&error_msg),
+        iterations: max_iterations,
+        input_tokens: total_input_tokens,
+        output_tokens: total_output_tokens,
+        tools_called: &tools_called,
+        elapsed_ms,
+    })
+    .await;
+
+    Err(DurableError::Internal(error_msg))
 }
 
 /// Execute a single agent loop iteration within a child context.
@@ -397,6 +436,101 @@ fn build_tool_results_message(results: Vec<ToolCallResult>) -> UnifiedMessage {
     UnifiedMessage {
         role: "user".to_string(),
         content: MessageContent::Blocks { content: blocks },
+    }
+}
+
+/// Extract final text from the LLM response for the execution record.
+fn extract_final_text(response: &LLMResponse) -> String {
+    response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Execution status update to write back to the AgentExecution DynamoDB table.
+struct ExecutionUpdate<'a> {
+    execution_id: &'a Option<String>,
+    executions_table: &'a Option<String>,
+    status: &'a str,
+    output: Option<&'a str>,
+    error_message: Option<&'a str>,
+    iterations: u32,
+    input_tokens: u32,
+    output_tokens: u32,
+    tools_called: &'a [String],
+    elapsed_ms: u64,
+}
+
+/// Write execution status back to the AgentExecution DynamoDB table.
+/// No-op if execution_id or executions_table is None.
+///
+/// Intentionally NOT a durable step — the update is idempotent (SET-only)
+/// so replaying it is safe, and checkpointing a `()` return adds overhead
+/// with no benefit.
+async fn update_execution_status(update: &ExecutionUpdate<'_>) {
+    let (Some(exec_id), Some(table)) = (update.execution_id, update.executions_table) else {
+        return;
+    };
+
+    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let client = aws_sdk_dynamodb::Client::new(&config);
+
+    let mut update_expr = String::from(
+        "SET #status = :status, iterations = :iterations, \
+         inputTokens = :input_tokens, outputTokens = :output_tokens, \
+         totalTokens = :total_tokens, toolsCalled = :tools_called, \
+         durationMs = :duration_ms, updatedAt = :updated_at, \
+         completedAt = :completed_at"
+    );
+    let mut expr_values = HashMap::new();
+    let mut expr_names = HashMap::new();
+
+    expr_names.insert("#status".to_string(), "status".to_string());
+
+    expr_values.insert(":status".to_string(), AttributeValue::S(update.status.to_string()));
+    expr_values.insert(":iterations".to_string(), AttributeValue::N(update.iterations.to_string()));
+    expr_values.insert(":input_tokens".to_string(), AttributeValue::N(update.input_tokens.to_string()));
+    expr_values.insert(":output_tokens".to_string(), AttributeValue::N(update.output_tokens.to_string()));
+    expr_values.insert(":total_tokens".to_string(), AttributeValue::N((update.input_tokens + update.output_tokens).to_string()));
+    expr_values.insert(
+        ":tools_called".to_string(),
+        AttributeValue::L(update.tools_called.iter().map(|t| AttributeValue::S(t.clone())).collect()),
+    );
+    expr_values.insert(":duration_ms".to_string(), AttributeValue::N(update.elapsed_ms.to_string()));
+    let now = chrono::Utc::now().to_rfc3339();
+    expr_values.insert(":updated_at".to_string(), AttributeValue::S(now.clone()));
+    expr_values.insert(":completed_at".to_string(), AttributeValue::S(now));
+
+    if let Some(out) = update.output {
+        update_expr.push_str(", output = :output");
+        expr_values.insert(":output".to_string(), AttributeValue::S(out.to_string()));
+    }
+    if let Some(err) = update.error_message {
+        update_expr.push_str(", errorMessage = :error_msg");
+        expr_values.insert(":error_msg".to_string(), AttributeValue::S(err.to_string()));
+    }
+
+    if let Err(e) = client
+        .update_item()
+        .table_name(table)
+        .key("id", AttributeValue::S(exec_id.clone()))
+        .update_expression(update_expr)
+        .set_expression_attribute_names(Some(expr_names))
+        .set_expression_attribute_values(Some(expr_values))
+        .send()
+        .await
+    {
+        tracing::warn!(
+            execution_id = %exec_id,
+            error = %e,
+            "Failed to update execution status — non-fatal"
+        );
     }
 }
 
