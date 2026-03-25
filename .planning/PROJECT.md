@@ -35,7 +35,7 @@ A single Durable Lambda replaces the entire Step Functions orchestration — the
 - [ ] Single generic Durable Agent Lambda reading all configuration from registry
 - [ ] Channels abstraction generalizing wait_for_callback into named communication channels
 - [ ] Agent Teams with dynamic MCP server generation and orchestrated execution
-- [ ] pmcp-run Agents tab for agent lifecycle management
+- ✓ pmcp-run Agents tab for agent lifecycle management — Phase 7
 - ✓ PMCP SDK reference example for MCP client patterns — Phase 6
 - [ ] Migration of Step Functions Agent management capabilities
 
@@ -109,4 +109,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-24 after Phase 6 completion*
+*Last updated: 2026-03-25 after Phase 7 completion*
