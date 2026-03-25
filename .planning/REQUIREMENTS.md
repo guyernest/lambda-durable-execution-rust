@@ -42,15 +42,15 @@ Requirements for v2.0 Integration Plan milestone. Each maps to roadmap phases.
 
 ### pmcp-run Agents Tab
 
-- [ ] **PMCP-01**: Agent list view in LCARS design system showing name, status, model, MCP servers
-- [ ] **PMCP-02**: Agent create/edit form with instructions, model selection, MCP server selection, channel config, parameters
-- [ ] **PMCP-03**: Agent delete with confirmation
-- [ ] **PMCP-04**: Model registry with provider, pricing, and capabilities (migrated from Step Functions LLMModels table)
-- [ ] **PMCP-05**: MCP server selector populated from pmcp-run's existing server registry
-- [ ] **PMCP-06**: API key management for LLM providers via Secrets Manager
-- [ ] **PMCP-07**: On-demand agent execution from UI with input textarea and agent selector
-- [ ] **PMCP-08**: Execution status tracking with running/completed/failed badges
-- [ ] **PMCP-09**: Execution history list with pagination, status filter, and agent filter
+- [x] **PMCP-01**: Agent list view in LCARS design system showing name, status, model, MCP servers
+- [x] **PMCP-02**: Agent create/edit form with instructions, model selection, MCP server selection, channel config, parameters
+- [x] **PMCP-03**: Agent delete with confirmation
+- [x] **PMCP-04**: Model registry with provider, pricing, and capabilities (migrated from Step Functions LLMModels table)
+- [x] **PMCP-05**: MCP server selector populated from pmcp-run's existing server registry
+- [x] **PMCP-06**: API key management for LLM providers via Secrets Manager
+- [x] **PMCP-07**: On-demand agent execution from UI with input textarea and agent selector
+- [x] **PMCP-08**: Execution status tracking with running/completed/failed badges
+- [x] **PMCP-09**: Execution history list with pagination, status filter, and agent filter
 - [ ] **PMCP-10**: Execution detail view with full conversation history rendering
 - [ ] **PMCP-11**: Metrics dashboard with token usage charts and execution success rates
 - [ ] **PMCP-12**: Cost tracking by model and agent with trend visualization
@@ -134,15 +134,15 @@ Deferred to future release. Tracked but not in current roadmap.
 | SDK-01 | Phase 6 | Complete |
 | SDK-02 | Phase 6 | Complete |
 | SDK-03 | Phase 6 | Complete |
-| PMCP-01 | Phase 7 | Pending |
-| PMCP-02 | Phase 7 | Pending |
-| PMCP-03 | Phase 7 | Pending |
-| PMCP-04 | Phase 7 | Pending |
-| PMCP-05 | Phase 7 | Pending |
-| PMCP-06 | Phase 7 | Pending |
-| PMCP-07 | Phase 7 | Pending |
-| PMCP-08 | Phase 7 | Pending |
-| PMCP-09 | Phase 7 | Pending |
+| PMCP-01 | Phase 7 | Complete |
+| PMCP-02 | Phase 7 | Complete |
+| PMCP-03 | Phase 7 | Complete |
+| PMCP-04 | Phase 7 | Complete |
+| PMCP-05 | Phase 7 | Complete |
+| PMCP-06 | Phase 7 | Complete |
+| PMCP-07 | Phase 7 | Complete |
+| PMCP-08 | Phase 7 | Complete |
+| PMCP-09 | Phase 7 | Complete |
 | PMCP-10 | Phase 7 | Pending |
 | PMCP-11 | Phase 7 | Pending |
 | PMCP-12 | Phase 7 | Pending |
