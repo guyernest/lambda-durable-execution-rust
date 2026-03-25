@@ -52,8 +52,8 @@ Requirements for v2.0 Integration Plan milestone. Each maps to roadmap phases.
 - [x] **PMCP-08**: Execution status tracking with running/completed/failed badges
 - [x] **PMCP-09**: Execution history list with pagination, status filter, and agent filter
 - [x] **PMCP-10**: Execution detail view with full conversation history rendering
-- [ ] **PMCP-11**: Metrics dashboard with token usage charts and execution success rates
-- [ ] **PMCP-12**: Cost tracking by model and agent with trend visualization
+- [x] **PMCP-11**: Metrics dashboard with token usage charts and execution success rates
+- [x] **PMCP-12**: Cost tracking by model and agent with trend visualization
 
 ### PMCP SDK Example
 
@@ -144,8 +144,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | PMCP-08 | Phase 7 | Complete |
 | PMCP-09 | Phase 7 | Complete |
 | PMCP-10 | Phase 7 | Complete |
-| PMCP-11 | Phase 7 | Pending |
-| PMCP-12 | Phase 7 | Pending |
+| PMCP-11 | Phase 7 | Complete |
+| PMCP-12 | Phase 7 | Complete |
 | CHAN-01 | Phase 8 | Pending |
 | CHAN-02 | Phase 8 | Pending |
 | CHAN-03 | Phase 8 | Pending |

@@ -145,7 +145,7 @@ Plans:
 - [x] 07-03-PLAN.md — CDK escape hatch for Durable Agent Lambda + IAM permissions + env var wiring
 - [x] 07-04-PLAN.md — Navigation entry, agent list page, create/edit forms, model/MCP server selectors
 - [ ] 07-05-PLAN.md — Execution panel, status tracking with polling, execution history with pagination
-- [ ] 07-06-PLAN.md — Execution detail view, metrics dashboard, cost tracking, API key management
+- [x] 07-06-PLAN.md — Execution detail view, metrics dashboard, cost tracking, API key management
 
 ### Phase 8: Channels and Approval Flow
 **Goal**: Agent can send messages to and receive responses from external platforms (Slack, Discord, webhooks) through named channels, and can pause for human approval before executing dangerous tools
