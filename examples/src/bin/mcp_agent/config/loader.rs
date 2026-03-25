@@ -18,8 +18,7 @@ pub async fn load_agent_config(
     agent_name: &str,
     version: &str,
 ) -> Result<AgentConfig, ConfigError> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let client = aws_sdk_dynamodb::Client::new(&config);
+    let client = crate::handler::get_dynamodb_client().await;
 
     let result = client
         .get_item()

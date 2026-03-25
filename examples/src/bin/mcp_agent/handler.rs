@@ -7,19 +7,6 @@ use lambda_durable_execution_rust::prelude::*;
 use tokio::sync::OnceCell;
 use tracing::info;
 
-/// Cached DynamoDB client — initialized once per Lambda instance, reused across invocations.
-/// Avoids re-loading credentials and re-creating the HTTP connection pool on every execution.
-static DYNAMODB_CLIENT: OnceCell<aws_sdk_dynamodb::Client> = OnceCell::const_new();
-
-async fn get_dynamodb_client() -> &'static aws_sdk_dynamodb::Client {
-    DYNAMODB_CLIENT
-        .get_or_init(|| async {
-            let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-            aws_sdk_dynamodb::Client::new(&config)
-        })
-        .await
-}
-
 use crate::config::{load_agent_config, AgentConfig};
 use crate::llm::{
     ContentBlock, FunctionCall, LLMInvocation, LLMResponse, MessageContent, UnifiedLLMService,
@@ -30,6 +17,22 @@ use crate::mcp::{
     ToolsWithRouting,
 };
 use crate::types::{AgentMetadata, AgentRequest, AgentResponse, IterationResult, ToolCallResult};
+
+/// Cached DynamoDB client — initialized once per Lambda instance, reused across invocations.
+/// The AWS SDK Client wraps an Arc internally, so it is cheap to clone and share.
+/// Using OnceCell means credentials and the HTTP connection pool are created once per
+/// Lambda execution environment, not once per handler invocation.
+static DYNAMODB_CLIENT: OnceCell<aws_sdk_dynamodb::Client> = OnceCell::const_new();
+
+/// Returns the cached DynamoDB client, initialising it on first call.
+pub(crate) async fn get_dynamodb_client() -> &'static aws_sdk_dynamodb::Client {
+    DYNAMODB_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+            aws_sdk_dynamodb::Client::new(&config)
+        })
+        .await
+}
 
 /// Durable agent handler implementing the full agent loop.
 ///
@@ -504,7 +507,9 @@ async fn update_execution_status(update: &ExecutionUpdate<'_>) {
     let mut expr_values = HashMap::new();
     let mut expr_names = HashMap::new();
 
+    // Both "status" and "output" are DynamoDB reserved keywords — must alias them
     expr_names.insert("#status".to_string(), "status".to_string());
+    expr_names.insert("#output".to_string(), "output".to_string());
 
     expr_values.insert(":status".to_string(), AttributeValue::S(update.status.to_string()));
     expr_values.insert(":iterations".to_string(), AttributeValue::N(update.iterations.to_string()));
@@ -521,7 +526,7 @@ async fn update_execution_status(update: &ExecutionUpdate<'_>) {
     expr_values.insert(":completed_at".to_string(), AttributeValue::S(now));
 
     if let Some(out) = update.output {
-        update_expr.push_str(", output = :output");
+        update_expr.push_str(", #output = :output");
         expr_values.insert(":output".to_string(), AttributeValue::S(out.to_string()));
     }
     if let Some(err) = update.error_message {
