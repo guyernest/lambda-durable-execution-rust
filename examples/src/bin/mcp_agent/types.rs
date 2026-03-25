@@ -57,6 +57,14 @@ pub struct InlineAgentConfig {
     /// Max agent loop iterations.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    /// Secrets Manager path for LLM API keys (e.g. "pmcp/orgs/{orgId}/agents/llm-keys").
+    /// Overrides the provider's default secret_path when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_path: Option<String>,
+    /// Key name within the secret (e.g. "ANTHROPIC_API_KEY").
+    /// Overrides the provider's default secret_key_name when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_key_name: Option<String>,
 }
 
 fn default_temperature() -> f32 { AgentParameters::default().temperature }
@@ -70,8 +78,16 @@ impl InlineAgentConfig {
         agent_name: &str,
         version: &str,
     ) -> Result<AgentConfig, crate::config::error::ConfigError> {
-        let provider_config =
+        let mut provider_config =
             crate::config::loader::map_provider_config(&self.provider, &self.model_id)?;
+
+        // Override secret path and key name if provided by the caller
+        if let Some(path) = self.secret_path {
+            provider_config.secret_path = path;
+        }
+        if let Some(key) = self.secret_key_name {
+            provider_config.secret_key_name = key;
+        }
 
         Ok(AgentConfig {
             agent_name: agent_name.to_string(),
