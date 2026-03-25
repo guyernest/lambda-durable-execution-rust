@@ -113,6 +113,8 @@ Add an Agents tab to the pmcp-run web UI that enables users to create, configure
 <deferred>
 ## Deferred Ideas
 
+- Channel config field in agent create/edit form — Phase 8 (Channels must exist first; add channelConfig field when channels are implemented)
+- EMF metric emission from agent Lambda — deferred from Phase 7; DynamoDB aggregation in UI provides equivalent metrics dashboard. Add EMF to Rust Lambda when CloudWatch time-series dashboards are needed
 - Scheduled/triggered agent execution (EventBridge Scheduler) — v3 (PMCP-13)
 - Approval dashboard for pending human approvals — Phase 8 (Channels)
 - Live execution streaming via WebSocket — v3 (PMCP-18)
