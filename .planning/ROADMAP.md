@@ -142,8 +142,8 @@ Plans:
 Plans:
 - [x] 07-01-PLAN.md — Data models (AgentConfig, AgentExecution, LLMModel) + custom mutations/queries in Amplify schema
 - [x] 07-02-PLAN.md — Backend functions (execute-agent, manage-agent-secrets, get-execution-detail)
-- [ ] 07-03-PLAN.md — CDK escape hatch for Durable Agent Lambda + IAM permissions + env var wiring
-- [ ] 07-04-PLAN.md — Navigation entry, agent list page, create/edit forms, model/MCP server selectors
+- [x] 07-03-PLAN.md — CDK escape hatch for Durable Agent Lambda + IAM permissions + env var wiring
+- [x] 07-04-PLAN.md — Navigation entry, agent list page, create/edit forms, model/MCP server selectors
 - [ ] 07-05-PLAN.md — Execution panel, status tracking with polling, execution history with pagination
 - [ ] 07-06-PLAN.md — Execution detail view, metrics dashboard, cost tracking, API key management
 
