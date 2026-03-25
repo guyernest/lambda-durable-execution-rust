@@ -4,7 +4,21 @@ use std::time::Instant;
 
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_durable_execution_rust::prelude::*;
+use tokio::sync::OnceCell;
 use tracing::info;
+
+/// Cached DynamoDB client — initialized once per Lambda instance, reused across invocations.
+/// Avoids re-loading credentials and re-creating the HTTP connection pool on every execution.
+static DYNAMODB_CLIENT: OnceCell<aws_sdk_dynamodb::Client> = OnceCell::const_new();
+
+async fn get_dynamodb_client() -> &'static aws_sdk_dynamodb::Client {
+    DYNAMODB_CLIENT
+        .get_or_init(|| async {
+            let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+            aws_sdk_dynamodb::Client::new(&config)
+        })
+        .await
+}
 
 use crate::config::{load_agent_config, AgentConfig};
 use crate::llm::{
@@ -478,8 +492,7 @@ async fn update_execution_status(update: &ExecutionUpdate<'_>) {
         return;
     };
 
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let client = aws_sdk_dynamodb::Client::new(&config);
+    let client = get_dynamodb_client().await;
 
     let mut update_expr = String::from(
         "SET #status = :status, iterations = :iterations, \
@@ -528,7 +541,9 @@ async fn update_execution_status(update: &ExecutionUpdate<'_>) {
     {
         tracing::warn!(
             execution_id = %exec_id,
+            table = %table,
             error = %e,
+            error_debug = ?e,
             "Failed to update execution status — non-fatal"
         );
     }
