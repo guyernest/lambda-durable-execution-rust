@@ -137,7 +137,15 @@ Plans:
   3. User triggers an agent execution from the UI with custom input, sees the execution status update from running to completed/failed, and can view the full conversation history including tool calls and results
   4. User views a metrics dashboard showing token usage charts and execution success rates across agents, with cost tracking broken down by model
   5. User manages LLM provider API keys through the UI via Secrets Manager integration, and selects from a model registry with provider and pricing information
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Data models (AgentConfig, AgentExecution, LLMModel) + custom mutations/queries in Amplify schema
+- [ ] 07-02-PLAN.md — Backend functions (execute-agent, manage-agent-secrets, get-execution-detail)
+- [ ] 07-03-PLAN.md — CDK escape hatch for Durable Agent Lambda + IAM permissions + env var wiring
+- [ ] 07-04-PLAN.md — Navigation entry, agent list page, create/edit forms, model/MCP server selectors
+- [ ] 07-05-PLAN.md — Execution panel, status tracking with polling, execution history with pagination
+- [ ] 07-06-PLAN.md — Execution detail view, metrics dashboard, cost tracking, API key management
 
 ### Phase 8: Channels and Approval Flow
 **Goal**: Agent can send messages to and receive responses from external platforms (Slack, Discord, webhooks) through named channels, and can pause for human approval before executing dangerous tools
@@ -176,6 +184,6 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9
 | 4. Observability | v1.0 | 1/1 | Complete | 2026-03-23 |
 | 5. Deployment and Validation | v1.0 | 1/1 | Complete | 2026-03-23 |
 | 6. PMCP SDK Example | v2.0 | 0/2 | Planned    |  |
-| 7. pmcp-run Agents Tab | v2.0 | 0/? | Not started | - |
+| 7. pmcp-run Agents Tab | v2.0 | 0/6 | Planned | - |
 | 8. Channels and Approval Flow | v2.0 | 0/? | Not started | - |
 | 9. Agent Teams | v2.0 | 0/? | Not started | - |
