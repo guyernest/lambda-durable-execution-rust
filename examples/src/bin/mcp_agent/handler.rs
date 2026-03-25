@@ -30,32 +30,47 @@ pub async fn agent_handler(
     ctx: DurableContextHandle,
     llm_service: UnifiedLLMService,
 ) -> DurableResult<AgentResponse> {
+    // Destructure to avoid unnecessary clones
+    let AgentRequest {
+        agent_name,
+        version,
+        messages: initial_messages,
+        inline_config,
+    } = event;
+
     info!(
-        agent = %event.agent_name,
-        version = %event.version,
+        agent = %agent_name,
+        version = %version,
         "Starting durable agent handler"
     );
 
     // OBS-02: Start wall-clock timer for elapsed_ms tracking
     let start_time = Instant::now();
 
-    // 1. Load config from AgentRegistry via durable step (CONF-04)
-    let table_name =
-        std::env::var("AGENT_REGISTRY_TABLE").unwrap_or_else(|_| "AgentRegistry".to_string());
-    let agent_name = event.agent_name.clone();
-    let version = event.version.clone();
+    // 1. Load config — either from inline payload or DynamoDB registry
+    let config: AgentConfig = if let Some(inline) = inline_config {
+        info!("Using inline config (pmcp-run mode)");
+        inline
+            .to_agent_config(&agent_name, &version)
+            .map_err(|e| DurableError::Internal(e.to_string()))?
+    } else {
+        // Registry mode: load from DynamoDB via durable step
+        let table_name =
+            std::env::var("AGENT_REGISTRY_TABLE").unwrap_or_else(|_| "AgentRegistry".to_string());
+        let an = agent_name.clone();
+        let ver = version.clone();
 
-    let config: AgentConfig = ctx
-        .step(
+        ctx.step(
             Some("load-config"),
             move |_| async move {
-                load_agent_config(&table_name, &agent_name, &version)
+                load_agent_config(&table_name, &an, &ver)
                     .await
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
             },
             None,
         )
-        .await?;
+        .await?
+    };
 
     info!(
         provider = %config.provider_config.provider_id,
@@ -64,7 +79,7 @@ pub async fn agent_handler(
         "Config loaded"
     );
 
-    // 2. Discover tools from MCP servers via durable step (MCP-02)
+    // 2. Discover tools from MCP servers via durable step
     let tools_with_routing: ToolsWithRouting = if config.mcp_server_urls.is_empty() {
         ToolsWithRouting {
             tools: vec![],
@@ -86,7 +101,7 @@ pub async fn agent_handler(
 
     info!(tools = tools_with_routing.tools.len(), "Tools discovered");
 
-    // 3. Establish MCP connections OUTSIDE durable steps (D-03, D-05)
+    // 3. Establish MCP connections OUTSIDE durable steps
     let mcp_clients: McpClientCache = if config.mcp_server_urls.is_empty() {
         Arc::new(HashMap::new())
     } else {
@@ -95,8 +110,8 @@ pub async fn agent_handler(
             .map_err(|e| DurableError::Internal(e.to_string()))?
     };
 
-    // 4. Agent loop (LOOP-01, LOOP-04, LOOP-05, LOOP-06)
-    let mut messages: Vec<UnifiedMessage> = event.messages;
+    // 4. Agent loop
+    let mut messages: Vec<UnifiedMessage> = initial_messages;
     let max_iterations = config.parameters.max_iterations;
     let config = Arc::new(config);
     let tools_with_routing = Arc::new(tools_with_routing);

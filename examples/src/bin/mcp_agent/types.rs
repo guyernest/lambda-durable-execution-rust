@@ -1,19 +1,86 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::types::{AgentConfig, AgentParameters};
 use crate::llm::models::{LLMResponse, UnifiedMessage};
 
-/// Agent handler input (per D-01).
+/// Agent handler input.
 ///
-/// The caller specifies which agent to run and the initial conversation.
-/// The handler loads configuration from AgentRegistry using `agent_name`/`version`.
+/// Supports two modes:
+/// 1. **Registry mode**: `agent_name` + `version` — handler loads config from DynamoDB
+/// 2. **Inline mode**: `inline_config` provided — handler skips DynamoDB lookup
+///
+/// Inline mode is used by pmcp-run's execute-agent function which resolves
+/// all config (instructions, model, MCP servers) before invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRequest {
-    /// Agent name (maps to DynamoDB partition key).
+    /// Agent name (DynamoDB PK in registry mode, display name in inline mode).
     pub agent_name: String,
-    /// Agent version (maps to DynamoDB sort key).
+    /// Agent version (DynamoDB SK in registry mode).
+    #[serde(default = "default_version")]
     pub version: String,
     /// Initial conversation messages.
     pub messages: Vec<UnifiedMessage>,
+    /// Pre-resolved config — when present, skips DynamoDB lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_config: Option<InlineAgentConfig>,
+}
+
+fn default_version() -> String {
+    "latest".to_string()
+}
+
+/// Pre-resolved agent configuration passed in the invocation payload.
+/// Used by pmcp-run to avoid schema mismatch with the original AgentRegistry table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineAgentConfig {
+    /// System prompt / instructions for the LLM.
+    pub instructions: String,
+    /// LLM provider name ("anthropic" or "openai").
+    pub provider: String,
+    /// LLM model ID (e.g. "claude-sonnet-4-20250514").
+    pub model_id: String,
+    /// MCP server endpoint URLs.
+    #[serde(default)]
+    pub mcp_server_urls: Vec<String>,
+    /// Sampling temperature.
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    /// Max tokens per LLM call.
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+    /// Max agent loop iterations.
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
+}
+
+fn default_temperature() -> f32 { AgentParameters::default().temperature }
+fn default_max_tokens() -> u32 { AgentParameters::default().max_tokens }
+fn default_max_iterations() -> u32 { AgentParameters::default().max_iterations }
+
+impl InlineAgentConfig {
+    /// Convert to the internal `AgentConfig` used by the handler.
+    pub fn to_agent_config(
+        self,
+        agent_name: &str,
+        version: &str,
+    ) -> Result<AgentConfig, crate::config::error::ConfigError> {
+        let provider_config =
+            crate::config::loader::map_provider_config(&self.provider, &self.model_id)?;
+
+        Ok(AgentConfig {
+            agent_name: agent_name.to_string(),
+            version: version.to_string(),
+            system_prompt: self.instructions,
+            provider_config,
+            mcp_server_urls: self.mcp_server_urls,
+            parameters: AgentParameters {
+                max_iterations: self.max_iterations,
+                temperature: self.temperature,
+                max_tokens: self.max_tokens,
+                timeout_seconds: AgentParameters::default().timeout_seconds,
+            },
+        })
+    }
 }
 
 /// Metadata about the agent execution for observability (OBS-01, OBS-02).
@@ -136,6 +203,7 @@ mod tests {
                     content: "Hello world".to_string(),
                 },
             }],
+            inline_config: None,
         };
 
         let serialized = serde_json::to_value(&request).expect("serialize");
